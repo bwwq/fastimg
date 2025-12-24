@@ -137,7 +137,7 @@ async function logout() {
 }
 
 // --- Navigation ---
-function switchView(viewName) {
+function switchView(viewName, resetFilter = false) {
     // Hide all views
     dom.viewGallery.classList.add('hidden');
     dom.viewUpload.classList.add('hidden');
@@ -148,6 +148,11 @@ function switchView(viewName) {
     if (viewName === 'gallery') {
         dom.viewGallery.classList.remove('hidden');
         document.querySelector('.nav-item:nth-child(1)').classList.add('active');
+
+        if (resetFilter) {
+            filterUserId = null;
+            currentPage = 1;
+        }
         loadImages(currentPage);
     } else if (viewName === 'upload') {
         dom.viewUpload.classList.remove('hidden');

@@ -3,7 +3,7 @@ import datetime
 import uuid
 from flask import Flask, request, jsonify, send_from_directory, render_template, abort
 from flask_login import login_user, logout_user, login_required, current_user
-from flask_wtf.csrf import CSRFProtect, generate_csrf
+from flask_wtf.csrf import CSRFProtect, generate_csrf, CSRFError
 from config import Config
 from extensions import db, login_manager, limiter, migrate
 from models import User, Image, ImageStat, SystemConfig, InviteCode
@@ -23,6 +23,10 @@ def create_app(config_class=Config):
     limiter.init_app(app)
     migrate.init_app(app, db)
     csrf.init_app(app)
+
+    @app.errorhandler(CSRFError)
+    def handle_csrf_error(e):
+        return jsonify({'error': 'CSRF token missing or incorrect'}), 400
 
     @login_manager.user_loader
     def load_user(user_id):

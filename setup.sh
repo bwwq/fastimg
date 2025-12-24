@@ -28,7 +28,7 @@ else
 fi
 
 # 3. 创建必要目录
-mkdir -p uploads
+mkdir -p uploads data
 
 # 4. 启动容器
 echo "Building and starting containers..."

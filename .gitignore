@@ -15,6 +15,10 @@ database.db
 uploads/*
 !uploads/.gitkeep
 
+# Data (database files)
+data/*
+!data/.gitkeep
+
 # Environment variables
 .env
 

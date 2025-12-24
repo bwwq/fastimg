@@ -3,16 +3,14 @@ version: '3.8'
 services:
   web:
     build: .
-    image: img-hosting:latest
-    container_name: img-hosting
+    image: fastimg:latest
+    container_name: fastimg
     restart: always
     ports:
       - "5000:5000"
     volumes:
       - ./uploads:/app/uploads
-      - ./database.db:/app/database.db
+      - ./data:/app/data
     environment:
-      - SECRET_KEY=${SECRET_KEY:-simple-secret-key}
-      - DATABASE_URL=sqlite:////app/database.db
-      # 如果需要调整 Flask Config
-      # - MAX_CONTENT_LENGTH=10485760 
+      - SECRET_KEY=${SECRET_KEY:-change-me-in-production}
+      - DATABASE_URL=sqlite:////app/data/database.db

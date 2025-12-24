@@ -134,8 +134,10 @@ def create_app(config_class=Config):
         used_bytes = db.session.query(func.sum(Image.size)).filter_by(user_id=current_user.id).scalar() or 0
         count = Image.query.filter_by(user_id=current_user.id).count()
         
-        # User quota: individual > global
-        if current_user.quota_bytes is not None:
+        # User quota: individual > global (but Admin is unlimited)
+        if current_user.role == 'admin':
+            quota_bytes = 0 # Unlimited
+        elif current_user.quota_bytes is not None:
             quota_bytes = current_user.quota_bytes
         else:
             quota_str = SystemConfig.get('user_quota')
@@ -334,23 +336,24 @@ def create_app(config_class=Config):
         # Passthrough mode: skip all processing, preserve original bytes (for Tavern cards etc.)
         passthrough = request.form.get('passthrough', 'false').lower() == 'true'
         
-        # Check quota before processing
-        from sqlalchemy import func
-        used_bytes = db.session.query(func.sum(Image.size)).filter_by(user_id=current_user.id).scalar() or 0
-        
-        if current_user.quota_bytes is not None:
-            quota_bytes = current_user.quota_bytes
-        else:
-            quota_str = SystemConfig.get('user_quota')
-            try:
-                quota_mb = int(quota_str) if quota_str and quota_str != 'None' else 500
-            except (ValueError, TypeError):
-                quota_mb = 500
-            quota_bytes = quota_mb * 1024 * 1024
-        
-        # 0 means unlimited
-        if quota_bytes > 0 and used_bytes >= quota_bytes:
-            return jsonify({'error': '存储配额已用尽'}), 400
+        # Check quota before processing (Admin is always unlimited)
+        if current_user.role != 'admin':
+            from sqlalchemy import func
+            used_bytes = db.session.query(func.sum(Image.size)).filter_by(user_id=current_user.id).scalar() or 0
+            
+            if current_user.quota_bytes is not None:
+                quota_bytes = current_user.quota_bytes
+            else:
+                quota_str = SystemConfig.get('user_quota')
+                try:
+                    quota_mb = int(quota_str) if quota_str and quota_str != 'None' else 500
+                except (ValueError, TypeError):
+                    quota_mb = 500
+                quota_bytes = quota_mb * 1024 * 1024
+            
+            # 0 means unlimited
+            if quota_bytes > 0 and used_bytes >= quota_bytes:
+                return jsonify({'error': '存储配额已用尽'}), 400
             
         try:
             # Process and Save to Disk

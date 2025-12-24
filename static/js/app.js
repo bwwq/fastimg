@@ -760,7 +760,14 @@ async function loadUsers() {
             const roleClass = u.role === 'admin' ? 'badge-admin' : 'badge-user';
             const activeClass = u.is_active ? '' : 'badge-inactive';
             const isMe = currentUser && currentUser.id === u.id;
-            const quotaDisplay = u.quota_bytes ? `${(u.quota_bytes / 1024 / 1024).toFixed(0)} MB` : '默认';
+            let quotaDisplay;
+            if (u.role === 'admin' || u.quota_bytes === 0) {
+                quotaDisplay = '无限';
+            } else if (u.quota_bytes) {
+                quotaDisplay = `${(u.quota_bytes / 1024 / 1024).toFixed(0)} MB`;
+            } else {
+                quotaDisplay = '默认';
+            }
 
             html += `
                 <div class="user-card">

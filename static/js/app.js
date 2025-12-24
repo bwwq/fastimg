@@ -195,7 +195,12 @@ let currentViewMode = 'grid';
 let filterUserId = null;
 let filterUsername = null;
 
+let lastLoadImagesTimestamp = 0;
+
 async function loadImages(page) {
+    const timestamp = Date.now();
+    lastLoadImagesTimestamp = timestamp;
+
     currentPage = page;
     const sort = currentSort.split('_');
     const sortBy = sort[0]; // time, size, name
@@ -213,25 +218,35 @@ async function loadImages(page) {
         if (header && header.originalText) header.innerText = header.originalText;
     }
 
-    const res = await fetch(url);
-    const data = await res.json();
+    // Indicate loading but keep content
+    dom.galleryGrid.style.opacity = '0.5';
+    dom.galleryGrid.style.pointerEvents = 'none'; // Prevent clicks while loading
 
-    dom.galleryGrid.innerHTML = '';
+    try {
+        const res = await fetch(url);
+        // Race condition check: if a newer request started, ignore this one
+        if (timestamp !== lastLoadImagesTimestamp) return;
 
-    if (data.images.length === 0) {
-        dom.galleryGrid.innerHTML = '<p style="grid-column:1/-1;text-align:center;margin-top:2rem;opacity:0.7">暂无图片，去上传一张吧</p>';
-    }
+        const data = await res.json();
 
-    data.images.forEach((img, index) => {
-        const div = document.createElement('div');
-        div.className = 'img-card fade-in';
-        div.style.animationDelay = `${index * 0.05}s`;
+        dom.galleryGrid.innerHTML = '';
+        dom.galleryGrid.style.opacity = '1';
+        dom.galleryGrid.style.pointerEvents = 'auto';
 
-        const sizeStr = img.size > 1024 * 1024
-            ? (img.size / (1024 * 1024)).toFixed(1) + ' MB'
-            : (img.size / 1024).toFixed(1) + ' KB';
+        if (data.images.length === 0) {
+            dom.galleryGrid.innerHTML = '<p style="grid-column:1/-1;text-align:center;margin-top:2rem;opacity:0.7">暂无图片，去上传一张吧</p>';
+        }
 
-        div.innerHTML = `
+        data.images.forEach((img, index) => {
+            const div = document.createElement('div');
+            div.className = 'img-card fade-in';
+            div.style.animationDelay = `${index * 0.05}s`;
+
+            const sizeStr = img.size > 1024 * 1024
+                ? (img.size / (1024 * 1024)).toFixed(1) + ' MB'
+                : (img.size / 1024).toFixed(1) + ' KB';
+
+            div.innerHTML = `
             <img src="/i/${img.filename}" loading="lazy" alt="${img.original_name}">
             <div class="img-overlay">
                 <div class="img-name">${img.original_name}</div>
@@ -241,24 +256,30 @@ async function loadImages(page) {
                 </div>
             </div>
         `;
-        div.onclick = () => showDetail(img);
-        dom.galleryGrid.appendChild(div);
-    });
+            div.onclick = () => showDetail(img);
+            dom.galleryGrid.appendChild(div);
+        });
 
-    // Update Stats
-    document.getElementById('statTotal').innerText = `${data.total} 张图片`;
+        // Update Stats
+        document.getElementById('statTotal').innerText = `${data.total} 张图片`;
 
-    // Pagination Controls
-    const pag = document.getElementById('pagination');
-    if (data.pages > 1) {
-        pag.classList.remove('hidden');
-        document.getElementById('pageIndicator').innerText = `${data.current_page} / ${data.pages}`;
-    } else {
-        pag.classList.add('hidden');
+        // Pagination Controls
+        const pag = document.getElementById('pagination');
+        if (data.pages > 1) {
+            pag.classList.remove('hidden');
+            document.getElementById('pageIndicator').innerText = `${data.current_page} / ${data.pages}`;
+        } else {
+            pag.classList.add('hidden');
+        }
+
+        // Refresh icons
+        if (window.feather) feather.replace();
+    } catch (e) {
+        if (timestamp !== lastLoadImagesTimestamp) return;
+        dom.galleryGrid.style.opacity = '1';
+        dom.galleryGrid.style.pointerEvents = 'auto';
+        console.error(e);
     }
-
-    // Refresh icons
-    if (window.feather) feather.replace();
 }
 
 function changeSortOrder() {

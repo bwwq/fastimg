@@ -63,7 +63,7 @@ def add_watermark(image):
         image = image.convert('RGBA')
     return Image.alpha_composite(image, txt_layer).convert('RGB')
 
-def process_and_save_image(file_storage, user_id, user_quality=None):
+def process_and_save_image(file_storage, user_id, user_quality=None, passthrough=False):
     # 1. Validate Header
     fmt = validate_image_header(file_storage.stream)
     if not fmt:
@@ -107,18 +107,37 @@ def process_and_save_image(file_storage, user_id, user_quality=None):
     except (ValueError, TypeError):
         max_mb = 0  # Default to unlimited if invalid
         
-    if max_mb > 0:
-        # Seek end to get size if content_length missing
-        file_storage.stream.seek(0, os.SEEK_END)
-        size = file_storage.stream.tell()
-        file_storage.stream.seek(0)
-        
-        if size > max_mb * 1024 * 1024:
-             raise ValueError(f"File too large. Max {max_mb}MB")
-    else:
-        # Reset stream position just in case
-        file_storage.stream.seek(0)
+    file_storage.stream.seek(0, os.SEEK_END)
+    size = file_storage.stream.tell()
+    file_storage.stream.seek(0)
+    
+    if max_mb > 0 and size > max_mb * 1024 * 1024:
+        raise ValueError(f"File too large. Max {max_mb}MB")
 
+    # Generate unique filename
+    unique_name = f"{uuid.uuid4().hex}.{ext}"
+    save_path = os.path.join(current_app.config['UPLOAD_FOLDER'], unique_name)
+
+    # ===== PASSTHROUGH MODE =====
+    # Save raw bytes without any processing (preserves PNG metadata chunks for Tavern cards etc.)
+    if passthrough:
+        with open(save_path, 'wb') as f:
+            f.write(file_storage.stream.read())
+        
+        # Get dimensions using Pillow (read-only, doesn't modify)
+        with Image.open(save_path) as img:
+            width, height = img.size
+        
+        return {
+            'filename': unique_name,
+            'original_name': filename,
+            'size': size,
+            'width': width,
+            'height': height,
+            'mime_type': f"image/{ext}"
+        }
+
+    # ===== NORMAL PROCESSING MODE =====
     # 2. Open Image
     try:
         img = Image.open(file_storage.stream)
@@ -135,16 +154,14 @@ def process_and_save_image(file_storage, user_id, user_quality=None):
     if enable_webp and fmt in ['jpeg', 'png']:
         target_fmt = 'WEBP'
         ext = 'webp'
+        # Update filename with new extension
+        unique_name = f"{uuid.uuid4().hex}.{ext}"
+        save_path = os.path.join(current_app.config['UPLOAD_FOLDER'], unique_name)
     
     # 4. Watermark (Skip for GIF)
     if fmt != 'gif':
         img = add_watermark(img)
 
-    # 5. Save
-    # Unique filename
-    unique_name = f"{uuid.uuid4().hex}.{ext}"
-    save_path = os.path.join(current_app.config['UPLOAD_FOLDER'], unique_name)
-    
     # Compress Quality: admin limit from config, user can choose up to that limit
     admin_quality_str = SystemConfig.get('compress_quality')
     try:

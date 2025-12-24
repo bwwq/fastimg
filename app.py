@@ -290,10 +290,12 @@ def create_app(config_class=Config):
         
         # Get user-specified quality (from form data)
         user_quality = request.form.get('quality', type=int)
+        # Passthrough mode: skip all processing, preserve original bytes (for Tavern cards etc.)
+        passthrough = request.form.get('passthrough', 'false').lower() == 'true'
             
         try:
             # Process and Save to Disk
-            meta = process_and_save_image(file, current_user.id, user_quality=user_quality)
+            meta = process_and_save_image(file, current_user.id, user_quality=user_quality, passthrough=passthrough)
             
             # Save to DB
             image = Image(

@@ -339,6 +339,7 @@ async function uploadFiles(files) {
     // Determine quality
     let quality = 80;
     const isOriginal = document.getElementById('originalModeCheck')?.checked;
+    const passthrough = isOriginal; // Original mode = passthrough (preserve metadata)
 
     if (isOriginal) {
         quality = 100;
@@ -356,7 +357,7 @@ async function uploadFiles(files) {
 
     for (const file of files) {
         const id = 'upload_' + Date.now() + '_' + Math.random().toString(36).substr(2, 5);
-        uploadQueue.push({ id, file, quality, status: 'pending' });
+        uploadQueue.push({ id, file, quality, passthrough, status: 'pending' });
 
         // Add UI element
         const el = document.createElement('div');
@@ -398,6 +399,9 @@ async function processQueue() {
     const formData = new FormData();
     formData.append('file', pending.file);
     formData.append('quality', pending.quality);
+    if (pending.passthrough) {
+        formData.append('passthrough', 'true');
+    }
 
     // Use XHR for progress events
     const xhr = new XMLHttpRequest();

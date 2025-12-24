@@ -61,7 +61,13 @@ python app.py
 
 ## 🐳 Docker 部署 (推荐)
 
-### 方式一：Docker Compose
+### ⚡ 一键部署脚本
+
+```bash
+curl -sSL https://raw.githubusercontent.com/bwwq/fastimg/main/setup.sh | bash
+```
+
+### 方式一：Docker Compose手动
 
 ```bash
 # 构建并启动

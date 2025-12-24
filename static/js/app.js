@@ -333,15 +333,39 @@ function toggleOriginalMode() {
     }
 }
 
+function toggleStrictMode() {
+    const strictCheck = document.getElementById('strictModeCheck');
+    const originalCheck = document.getElementById('originalModeCheck');
+    const wrapper = document.getElementById('qualitySliderWrapper');
+
+    const isStrict = strictCheck.checked;
+    localStorage.setItem('strictMode', isStrict);
+
+    if (isStrict) {
+        // Strict mode: also enables original mode implicitly
+        wrapper.style.display = 'none';
+        originalCheck.checked = true;
+        originalCheck.disabled = true; // Can't uncheck original if strict is on
+        localStorage.setItem('originalMode', true);
+    } else {
+        originalCheck.disabled = false;
+        // If original is still checked, keep slider hidden
+        if (!originalCheck.checked) {
+            wrapper.style.display = 'block';
+        }
+    }
+}
+
 async function uploadFiles(files) {
     if (!files || files.length === 0) return;
 
-    // Determine quality
+    // Determine quality and passthrough
     let quality = 80;
     const isOriginal = document.getElementById('originalModeCheck')?.checked;
-    const passthrough = isOriginal; // Original mode = passthrough (preserve metadata)
+    const isStrict = document.getElementById('strictModeCheck')?.checked;
+    const passthrough = isStrict; // Only strict mode triggers passthrough
 
-    if (isOriginal) {
+    if (isOriginal || isStrict) {
         quality = 100;
     } else {
         quality = Math.min(

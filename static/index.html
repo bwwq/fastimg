@@ -129,11 +129,19 @@
                             <div
                                 style="display:flex; justify-content:space-between; align-items:center; margin-bottom:0.8rem">
                                 <label style="margin:0">图片压缩质量</label>
-                                <label class="checkbox-label"
-                                    style="font-size:0.9rem; display:flex; align-items:center; gap:0.5rem; cursor:pointer"
-                                    id="originalModeContainer">
-                                    <input type="checkbox" id="originalModeCheck" onchange="toggleOriginalMode()"> 原图模式
-                                </label>
+                                <div style="display:flex; gap:1rem; align-items:center">
+                                    <label class="checkbox-label"
+                                        style="font-size:0.9rem; display:flex; align-items:center; gap:0.4rem; cursor:pointer"
+                                        id="originalModeContainer" title="质量设为100%，仍会应用水印和格式转换">
+                                        <input type="checkbox" id="originalModeCheck" onchange="toggleOriginalMode()">
+                                        原图
+                                    </label>
+                                    <label class="checkbox-label"
+                                        style="font-size:0.9rem; display:flex; align-items:center; gap:0.4rem; cursor:pointer"
+                                        id="strictModeContainer" title="完全保留原文件，不做任何处理（适用于酒馆角色卡等带元数据的PNG）">
+                                        <input type="checkbox" id="strictModeCheck" onchange="toggleStrictMode()"> 完整原图
+                                    </label>
+                                </div>
                             </div>
                             <div id="qualitySliderWrapper">
                                 <div style="display:flex; justify-content:space-between; align-items:center">

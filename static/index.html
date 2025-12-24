@@ -135,14 +135,18 @@
                                     <input type="checkbox" id="originalModeCheck" onchange="toggleOriginalMode()"> 原图模式
                                 </label>
                             </div>
-                            <span id="qualityValue" style="font-weight: 600; color: var(--accent)">80%</span>
-                            </label>
-                            <input type="range" id="uploadQuality" value="80" min="10" max="100"
-                                oninput="document.getElementById('qualityValue').innerText = this.value + '%'"
-                                style="width: 100%">
-                            <p style="font-size: 0.85rem; opacity: 0.7; margin-top: 0.5rem">
-                                质量越高文件越大，但画质更好 (管理员设置上限: <span id="maxQualityHint">100</span>%)
-                            </p>
+                            <div id="qualitySliderWrapper">
+                                <div style="display:flex; justify-content:space-between; align-items:center">
+                                    <span style="font-size:0.9rem; color:var(--text-secondary)">质量</span>
+                                    <span id="qualityValue" style="font-weight:600; color:var(--accent)">80%</span>
+                                </div>
+                                <input type="range" id="uploadQuality" value="80" min="10" max="100"
+                                    oninput="document.getElementById('qualityValue').innerText = this.value + '%'"
+                                    style="width:100%; margin-top:0.5rem">
+                                <p style="font-size:0.85rem; opacity:0.7; margin-top:0.5rem">
+                                    质量越高文件越大 (上限: <span id="maxQualityHint">100</span>%)
+                                </p>
+                            </div>
                         </div>
                     </div>
 

@@ -294,13 +294,14 @@ async function loadMaxQuality() {
 
                 if (slider) {
                     slider.max = maxQualityLimit;
+                    const wrapper = document.getElementById('qualitySliderWrapper');
 
                     if (savedOriginal && maxQualityLimit >= 100) {
                         checkbox.checked = true;
-                        slider.disabled = true;
+                        wrapper.style.display = 'none';
                         slider.value = 100;
-                        document.getElementById('qualityValue').innerText = '原图';
                     } else if (savedQuality) {
+                        wrapper.style.display = 'block';
                         slider.value = Math.min(parseInt(savedQuality), maxQualityLimit);
                         document.getElementById('qualityValue').innerText = slider.value + '%';
                     }
@@ -315,21 +316,20 @@ async function loadMaxQuality() {
 
 function toggleOriginalMode() {
     const checkbox = document.getElementById('originalModeCheck');
+    const wrapper = document.getElementById('qualitySliderWrapper');
     const slider = document.getElementById('uploadQuality');
-    const label = document.getElementById('qualityValue');
 
     const isOriginal = checkbox.checked;
     localStorage.setItem('originalMode', isOriginal);
 
     if (isOriginal) {
-        slider.disabled = true;
+        wrapper.style.display = 'none';
         slider.value = 100;
-        label.innerText = '原图';
     } else {
-        slider.disabled = false;
+        wrapper.style.display = 'block';
         const saved = localStorage.getItem('uploadQuality') || 80;
         slider.value = Math.min(parseInt(saved), maxQualityLimit);
-        label.innerText = slider.value + '%';
+        document.getElementById('qualityValue').innerText = slider.value + '%';
     }
 }
 

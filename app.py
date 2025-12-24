@@ -3,10 +3,13 @@ import datetime
 import uuid
 from flask import Flask, request, jsonify, send_from_directory, render_template, abort
 from flask_login import login_user, logout_user, login_required, current_user
+from flask_wtf.csrf import CSRFProtect, generate_csrf
 from config import Config
 from extensions import db, login_manager, limiter, migrate
 from models import User, Image, ImageStat, SystemConfig, InviteCode
 from utils import process_and_save_image
+
+csrf = CSRFProtect()
 
 def create_app(config_class=Config):
     app = Flask(__name__)
@@ -19,6 +22,7 @@ def create_app(config_class=Config):
     login_manager.init_app(app)
     limiter.init_app(app)
     migrate.init_app(app, db)
+    csrf.init_app(app)
 
     @login_manager.user_loader
     def load_user(user_id):
@@ -31,6 +35,11 @@ def create_app(config_class=Config):
     @app.route('/')
     def index():
         return app.send_static_file('index.html')
+
+    @app.route('/api/csrf-token')
+    def get_csrf_token():
+        """Get CSRF token for frontend requests."""
+        return jsonify({'csrf_token': generate_csrf()})
 
     @app.route('/api/auth/register', methods=['POST'])
     @limiter.limit("5 per minute")

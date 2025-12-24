@@ -2,6 +2,7 @@
 let currentUser = null;
 let currentPage = 1;
 let currentImage = null;
+let csrfToken = null;
 
 // DOM Cache
 const dom = {
@@ -16,11 +17,37 @@ const dom = {
 };
 
 // Init
-document.addEventListener('DOMContentLoaded', () => {
+document.addEventListener('DOMContentLoaded', async () => {
     initTheme();
+    await fetchCsrfToken();
     checkAuth();
     setupEventListeners();
 });
+
+// --- CSRF Token ---
+async function fetchCsrfToken() {
+    try {
+        const res = await fetch('/api/csrf-token');
+        const data = await res.json();
+        csrfToken = data.csrf_token;
+    } catch (e) {
+        console.error('Failed to fetch CSRF token');
+    }
+}
+
+// Global fetch interceptor for CSRF
+const originalFetch = window.fetch;
+window.fetch = function (url, options = {}) {
+    if (csrfToken && ['POST', 'PUT', 'DELETE', 'PATCH'].includes((options.method || 'GET').toUpperCase())) {
+        options.headers = options.headers || {};
+        if (options.headers instanceof Headers) {
+            options.headers.set('X-CSRFToken', csrfToken);
+        } else {
+            options.headers['X-CSRFToken'] = csrfToken;
+        }
+    }
+    return originalFetch(url, options);
+};
 
 // --- Theme Logic ---
 function initTheme() {
@@ -493,6 +520,9 @@ async function processQueue() {
     };
 
     xhr.open('POST', '/api/upload');
+    if (csrfToken) {
+        xhr.setRequestHeader('X-CSRFToken', csrfToken);
+    }
     xhr.send(formData);
 }
 

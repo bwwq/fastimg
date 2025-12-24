@@ -295,9 +295,15 @@ async function uploadFiles(files) {
         el.className = 'card';
         el.style.cssText = 'padding: 0.75rem 1rem; display: flex; align-items: center; gap: 1rem';
         el.innerHTML = `
-            <div style="flex: 1; overflow: hidden; text-overflow: ellipsis; white-space: nowrap">${file.name}</div>
-            <div style="font-size: 0.85rem; color: var(--text-secondary)">${(file.size / 1024).toFixed(1)} KB</div>
-            <div class="upload-status" style="font-size: 0.85rem; color: var(--warning)">等待中</div>
+            <div style="flex:1; min-width:0">
+                <div style="display:flex; justify-content:space-between; margin-bottom:0.25rem">
+                    <div style="overflow:hidden; text-overflow:ellipsis; white-space:nowrap; max-width:70%">${file.name}</div>
+                    <div class="upload-status" style="font-size:0.85rem; color:var(--text-secondary)">等待中</div>
+                </div>
+                <div class="progress-bar-bg" style="height:4px; border-radius:2px">
+                    <div class="progress-bar-fill" style="width:0%"></div>
+                </div>
+            </div>
         `;
         queueList.appendChild(el);
     }
@@ -316,45 +322,76 @@ async function processQueue() {
 
     const el = document.getElementById(pending.id);
     const statusEl = el?.querySelector('.upload-status');
-    if (statusEl) {
-        statusEl.textContent = '上传中...';
-        statusEl.style.color = 'var(--accent)';
-    }
+    const progressEl = el?.querySelector('.progress-bar-fill');
+
+    if (statusEl) statusEl.textContent = '准备上传...';
 
     const formData = new FormData();
     formData.append('file', pending.file);
     formData.append('quality', pending.quality);
 
-    try {
-        const res = await fetch('/api/upload', { method: 'POST', body: formData });
-        if (res.ok) {
-            const img = await res.json();
+    // Use XHR for progress events
+    const xhr = new XMLHttpRequest();
+
+    xhr.upload.onprogress = (e) => {
+        if (e.lengthComputable && progressEl) {
+            const percent = (e.loaded / e.total) * 100;
+            progressEl.style.width = `${percent}%`;
+            // 99% doesn't mean server processing done
+            if (percent < 100) {
+                if (statusEl) statusEl.textContent = `上传中 ${Math.round(percent)}%`;
+            } else {
+                if (statusEl) statusEl.textContent = '服务器处理中...';
+            }
+        }
+    };
+
+    xhr.onload = async () => {
+        if (xhr.status >= 200 && xhr.status < 300) {
+            const img = JSON.parse(xhr.responseText);
             pending.status = 'done';
             if (statusEl) {
                 statusEl.textContent = '完成';
                 statusEl.style.color = 'var(--success)';
             }
+            if (progressEl) progressEl.style.width = '100%';
+
             // If only one file, show detail
             if (uploadQueue.length === 1) {
                 showDetail(img);
             }
         } else {
-            const err = await res.json();
+            let err = { error: 'Unknown error' };
+            try { err = JSON.parse(xhr.responseText); } catch (e) { }
+
             pending.status = 'error';
             if (statusEl) {
                 statusEl.textContent = err.error || '失败';
                 statusEl.style.color = 'var(--danger)';
             }
+            if (progressEl) progressEl.style.backgroundColor = 'var(--danger)';
         }
-    } catch (e) {
+
+        isUploading = false;
+        checkNext();
+    };
+
+    xhr.onerror = () => {
         pending.status = 'error';
         if (statusEl) {
-            statusEl.textContent = '网络错误';
+            statusEl.textContent = '网络中断';
             statusEl.style.color = 'var(--danger)';
         }
-    }
+        isUploading = false;
+        checkNext();
+    };
 
-    isUploading = false;
+    xhr.open('POST', '/api/upload');
+    xhr.send(formData);
+}
+
+function checkNext() {
+    // Process next in queue (extracted helper)
 
     // Process next in queue
     const remaining = uploadQueue.filter(u => u.status === 'pending').length;

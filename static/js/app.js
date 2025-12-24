@@ -730,6 +730,7 @@ async function loadUsers() {
             const roleClass = u.role === 'admin' ? 'badge-admin' : 'badge-user';
             const activeClass = u.is_active ? '' : 'badge-inactive';
             const isMe = currentUser && currentUser.id === u.id;
+            const quotaDisplay = u.quota_bytes ? `${(u.quota_bytes / 1024 / 1024).toFixed(0)} MB` : '默认';
 
             html += `
                 <div class="user-card">
@@ -742,7 +743,7 @@ async function loadUsers() {
                             ${isMe ? '<span style="font-size:0.75rem; color:var(--text-muted)">(你)</span>' : ''}
                         </div>
                         <div class="user-card-meta">
-                            ${u.image_count} 张图片 · ${usedMB} MB · 注册于 ${new Date(u.created_at).toLocaleDateString()}
+                            ${u.image_count} 张 · ${usedMB} MB / ${quotaDisplay} · ${new Date(u.created_at).toLocaleDateString()}
                         </div>
                     </div>
                     ${!isMe ? `
@@ -752,6 +753,9 @@ async function loadUsers() {
                         </button>
                         <button class="btn btn-secondary btn-sm" onclick="changeUserPassword(${u.id})" title="修改密码">
                             <i data-feather="key"></i>
+                        </button>
+                        <button class="btn btn-secondary btn-sm" onclick="setUserQuota(${u.id}, ${u.quota_bytes || 'null'})" title="设置配额">
+                            <i data-feather="hard-drive"></i>
                         </button>
                         <select onchange="updateUserRole(${u.id}, this.value)" style="padding:0.25rem; border-radius:var(--radius-sm); border:1px solid var(--border); background:var(--bg-secondary); color:var(--text-primary)">
                             <option value="user" ${u.role === 'user' ? 'selected' : ''}>用户</option>
@@ -805,6 +809,31 @@ async function changeUserPassword(userId) {
         }
     } catch (e) {
         showToast("网络错误", "error");
+    }
+}
+
+async function setUserQuota(userId, currentQuotaBytes) {
+    const currentMB = currentQuotaBytes ? Math.round(currentQuotaBytes / 1024 / 1024) : '';
+    const input = prompt(`设置用户存储配额 (MB)：\n留空表示使用全局默认，0 表示无限制`, currentMB);
+    if (input === null) return; // Cancelled
+
+    const quotaMB = input.trim() === '' ? null : parseInt(input);
+
+    try {
+        const res = await fetch(`/api/admin/users/${userId}/quota`, {
+            method: 'PUT',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ quota_mb: quotaMB })
+        });
+        if (res.ok) {
+            showToast('配额已更新');
+            loadUsers();
+        } else {
+            const d = await res.json();
+            showToast(d.error || '失败', 'error');
+        }
+    } catch (e) {
+        showToast('网络错误', 'error');
     }
 }
 

@@ -10,6 +10,7 @@ class User(UserMixin, db.Model):
     role = db.Column(db.String(20), default='user')  # 'user' or 'admin'
     created_at = db.Column(db.DateTime, default=datetime.utcnow)
     is_active_user = db.Column(db.Boolean, default=True)
+    quota_bytes = db.Column(db.BigInteger, nullable=True)  # null = use global default
     
     # 关系
     images = db.relationship('Image', backref='owner', lazy='dynamic')
@@ -26,7 +27,8 @@ class User(UserMixin, db.Model):
             'username': self.username,
             'role': self.role,
             'created_at': self.created_at.isoformat(),
-            'is_active': self.is_active_user
+            'is_active': self.is_active_user,
+            'quota_bytes': self.quota_bytes  # null means use global
         }
 
 class Image(db.Model):

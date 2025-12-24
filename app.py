@@ -121,17 +121,21 @@ def create_app(config_class=Config):
         used_bytes = db.session.query(func.sum(Image.size)).filter_by(user_id=current_user.id).scalar() or 0
         count = Image.query.filter_by(user_id=current_user.id).count()
         
-        # Parse quota safely
-        quota_str = SystemConfig.get('user_quota')
-        try:
-            quota_mb = int(quota_str) if quota_str and quota_str != 'None' else 500
-        except (ValueError, TypeError):
-            quota_mb = 500
+        # User quota: individual > global
+        if current_user.quota_bytes is not None:
+            quota_bytes = current_user.quota_bytes
+        else:
+            quota_str = SystemConfig.get('user_quota')
+            try:
+                quota_mb = int(quota_str) if quota_str and quota_str != 'None' else 500
+            except (ValueError, TypeError):
+                quota_mb = 500
+            quota_bytes = quota_mb * 1024 * 1024
             
         return jsonify({
             'used_bytes': used_bytes,
             'image_count': count,
-            'quota_mb': quota_mb
+            'quota_bytes': quota_bytes
         })
 
     @app.route('/api/auth/password', methods=['PUT'])
@@ -231,6 +235,30 @@ def create_app(config_class=Config):
         db.session.commit()
         return jsonify({'message': 'Password updated'})
 
+    @app.route('/api/admin/users/<int:user_id>/quota', methods=['PUT'])
+    @login_required
+    def admin_set_user_quota(user_id):
+        if current_user.role != 'admin':
+            return jsonify({'error': 'Unauthorized'}), 403
+            
+        target_user = db.session.get(User, user_id)
+        if not target_user:
+            return jsonify({'error': 'User not found'}), 404
+            
+        data = request.get_json()
+        quota_mb = data.get('quota_mb')  # in MB, null means use global
+        
+        if quota_mb is None or quota_mb == '':
+            target_user.quota_bytes = None  # Reset to global default
+        else:
+            try:
+                target_user.quota_bytes = int(float(quota_mb) * 1024 * 1024)
+            except (ValueError, TypeError):
+                return jsonify({'error': 'Invalid quota value'}), 400
+        
+        db.session.commit()
+        return jsonify({'message': 'Quota updated', 'quota_bytes': target_user.quota_bytes})
+
     @app.route('/api/admin/invites', methods=['GET', 'POST', 'DELETE'])
     @login_required
     def admin_invites():
@@ -292,6 +320,24 @@ def create_app(config_class=Config):
         user_quality = request.form.get('quality', type=int)
         # Passthrough mode: skip all processing, preserve original bytes (for Tavern cards etc.)
         passthrough = request.form.get('passthrough', 'false').lower() == 'true'
+        
+        # Check quota before processing
+        from sqlalchemy import func
+        used_bytes = db.session.query(func.sum(Image.size)).filter_by(user_id=current_user.id).scalar() or 0
+        
+        if current_user.quota_bytes is not None:
+            quota_bytes = current_user.quota_bytes
+        else:
+            quota_str = SystemConfig.get('user_quota')
+            try:
+                quota_mb = int(quota_str) if quota_str and quota_str != 'None' else 500
+            except (ValueError, TypeError):
+                quota_mb = 500
+            quota_bytes = quota_mb * 1024 * 1024
+        
+        # 0 means unlimited
+        if quota_bytes > 0 and used_bytes >= quota_bytes:
+            return jsonify({'error': '存储配额已用尽'}), 400
             
         try:
             # Process and Save to Disk

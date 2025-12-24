@@ -211,6 +211,26 @@ def create_app(config_class=Config):
             db.session.commit()
             return jsonify({'message': 'User deleted'})
 
+    @app.route('/api/admin/users/<int:user_id>/password', methods=['PUT'])
+    @login_required
+    def admin_reset_user_password(user_id):
+        if current_user.role != 'admin':
+            return jsonify({'error': 'Unauthorized'}), 403
+            
+        target_user = db.session.get(User, user_id)
+        if not target_user:
+            return jsonify({'error': 'User not found'}), 404
+            
+        data = request.get_json()
+        new_password = data.get('password')
+        
+        if not new_password or len(new_password) < 6:
+             return jsonify({'error': 'Password too short'}), 400
+             
+        target_user.set_password(new_password)
+        db.session.commit()
+        return jsonify({'message': 'Password updated'})
+
     @app.route('/api/admin/invites', methods=['GET', 'POST', 'DELETE'])
     @login_required
     def admin_invites():
@@ -308,8 +328,15 @@ def create_app(config_class=Config):
         order = request.args.get('order', 'desc')  # asc, desc
         
         query = Image.query
+        
+        # Admin can view other users' images if user_id is provided
+        target_user_id = request.args.get('user_id', type=int)
+
         if current_user.is_authenticated:
-            query = query.filter_by(user_id=current_user.id)
+            if current_user.role == 'admin' and target_user_id:
+                query = query.filter_by(user_id=target_user_id)
+            else:
+                query = query.filter_by(user_id=current_user.id)
         else:
             return jsonify({'error': 'Login required'}), 401
         

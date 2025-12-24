@@ -26,7 +26,7 @@
             </div>
 
             <nav class="nav-links">
-                <div class="nav-item active" onclick="switchView('gallery')">
+                <div class="nav-item active" onclick="filterUserId=null; switchView('gallery')">
                     <i data-feather="grid"></i> 我的图片
                 </div>
                 <div class="nav-item" onclick="switchView('upload')">
@@ -126,9 +126,16 @@
                     <!-- Quality Control -->
                     <div class="card" style="margin-top: 1.5rem; padding: 1.5rem">
                         <div class="form-group" style="margin-bottom: 0">
-                            <label style="display: flex; justify-content: space-between">
-                                图片压缩质量
-                                <span id="qualityValue" style="font-weight: 600; color: var(--accent)">80%</span>
+                            <div
+                                style="display:flex; justify-content:space-between; align-items:center; margin-bottom:0.8rem">
+                                <label style="margin:0">图片压缩质量</label>
+                                <label class="checkbox-label"
+                                    style="font-size:0.9rem; display:flex; align-items:center; gap:0.5rem; cursor:pointer"
+                                    id="originalModeContainer">
+                                    <input type="checkbox" id="originalModeCheck" onchange="toggleOriginalMode()"> 原图模式
+                                </label>
+                            </div>
+                            <span id="qualityValue" style="font-weight: 600; color: var(--accent)">80%</span>
                             </label>
                             <input type="range" id="uploadQuality" value="80" min="10" max="100"
                                 oninput="document.getElementById('qualityValue').innerText = this.value + '%'"

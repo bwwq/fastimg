@@ -159,6 +159,7 @@ function switchView(viewName) {
 // --- Images ---
 let currentSort = 'time_desc';
 let currentViewMode = 'grid';
+let filterUserId = null;
 
 async function loadImages(page) {
     currentPage = page;
@@ -166,7 +167,19 @@ async function loadImages(page) {
     const sortBy = sort[0]; // time, size, name
     const sortOrder = sort[1]; // asc, desc
 
-    const res = await fetch(`/api/images?page=${page}&sort=${sortBy}&order=${sortOrder}`);
+    let url = `/api/images?page=${page}&sort=${sortBy}&order=${sortOrder}`;
+    if (filterUserId) {
+        url += `&user_id=${filterUserId}`;
+        // Show indicator that we are filtering
+        const header = document.querySelector('.gallery-header h2');
+        if (header && !header.originalText) header.originalText = header.innerText;
+        if (header) header.innerText = `用户 ${filterUserId} 的图片`;
+    } else {
+        const header = document.querySelector('.gallery-header h2');
+        if (header && header.originalText) header.innerText = header.originalText;
+    }
+
+    const res = await fetch(url);
     const data = await res.json();
 
     dom.galleryGrid.innerHTML = '';
@@ -257,11 +270,32 @@ async function loadMaxQuality() {
                 maxQualityLimit = parseInt(data.compress_quality) || 100;
                 const slider = document.getElementById('uploadQuality');
                 const hint = document.getElementById('maxQualityHint');
+                const checkbox = document.getElementById('originalModeCheck');
+                const container = document.getElementById('originalModeContainer');
+
+                // Show/Hide Original Mode based on admin limit
+                if (maxQualityLimit >= 100) {
+                    container.style.display = 'flex';
+                } else {
+                    container.style.display = 'none';
+                    if (checkbox) checkbox.checked = false;
+                }
+
+                // Load previous settings
+                const savedQuality = localStorage.getItem('uploadQuality');
+                const savedOriginal = localStorage.getItem('originalMode') === 'true';
+
                 if (slider) {
                     slider.max = maxQualityLimit;
-                    if (parseInt(slider.value) > maxQualityLimit) {
-                        slider.value = maxQualityLimit;
-                        document.getElementById('qualityValue').innerText = maxQualityLimit + '%';
+
+                    if (savedOriginal && maxQualityLimit >= 100) {
+                        checkbox.checked = true;
+                        slider.disabled = true;
+                        slider.value = 100;
+                        document.getElementById('qualityValue').innerText = '原图';
+                    } else if (savedQuality) {
+                        slider.value = Math.min(parseInt(savedQuality), maxQualityLimit);
+                        document.getElementById('qualityValue').innerText = slider.value + '%';
                     }
                 }
                 if (hint) hint.innerText = maxQualityLimit;
@@ -272,13 +306,41 @@ async function loadMaxQuality() {
     }
 }
 
+function toggleOriginalMode() {
+    const checkbox = document.getElementById('originalModeCheck');
+    const slider = document.getElementById('uploadQuality');
+    const label = document.getElementById('qualityValue');
+
+    const isOriginal = checkbox.checked;
+    localStorage.setItem('originalMode', isOriginal);
+
+    if (isOriginal) {
+        slider.disabled = true;
+        slider.value = 100;
+        label.innerText = '原图';
+    } else {
+        slider.disabled = false;
+        const saved = localStorage.getItem('uploadQuality') || 80;
+        slider.value = Math.min(parseInt(saved), maxQualityLimit);
+        label.innerText = slider.value + '%';
+    }
+}
+
 async function uploadFiles(files) {
     if (!files || files.length === 0) return;
 
-    const quality = Math.min(
-        parseInt(document.getElementById('uploadQuality')?.value || 80),
-        maxQualityLimit
-    );
+    // Determine quality
+    let quality = 80;
+    const isOriginal = document.getElementById('originalModeCheck')?.checked;
+
+    if (isOriginal) {
+        quality = 100;
+    } else {
+        quality = Math.min(
+            parseInt(document.getElementById('uploadQuality')?.value || 80),
+            maxQualityLimit
+        );
+    }
 
     // Add to queue
     const queueContainer = document.getElementById('uploadQueue');
@@ -423,6 +485,17 @@ function setupEventListeners() {
     // DnD
     const zone = document.getElementById('dropZone');
     const input = document.getElementById('fileInput');
+
+    // Quality Slider
+    const slider = document.getElementById('uploadQuality');
+    if (slider) {
+        slider.oninput = (e) => {
+            document.getElementById('qualityValue').innerText = e.target.value + '%';
+        };
+        slider.onchange = (e) => {
+            localStorage.setItem('uploadQuality', e.target.value);
+        };
+    }
 
     zone.onclick = () => input.click();
     input.onchange = (e) => uploadFiles(e.target.files);
@@ -630,15 +703,21 @@ async function loadUsers() {
                     </div>
                     ${!isMe ? `
                     <div class="user-card-actions">
+                        <button class="btn btn-secondary btn-sm" onclick="viewUserFiles(${u.id})" title="查看文件">
+                            <i data-feather="image"></i>
+                        </button>
+                        <button class="btn btn-secondary btn-sm" onclick="changeUserPassword(${u.id})" title="修改密码">
+                            <i data-feather="key"></i>
+                        </button>
                         <select onchange="updateUserRole(${u.id}, this.value)" style="padding:0.25rem; border-radius:var(--radius-sm); border:1px solid var(--border); background:var(--bg-secondary); color:var(--text-primary)">
-                            <option value="user" ${u.role === 'user' ? 'selected' : ''}>普通用户</option>
+                            <option value="user" ${u.role === 'user' ? 'selected' : ''}>用户</option>
                             <option value="admin" ${u.role === 'admin' ? 'selected' : ''}>管理员</option>
                         </select>
                         <button class="btn btn-secondary btn-sm" onclick="toggleUserActive(${u.id}, ${u.is_active})" style="padding:0.25rem 0.5rem; font-size:0.8rem">
                             ${u.is_active ? '禁用' : '启用'}
                         </button>
                         <button class="btn btn-danger btn-sm" onclick="deleteUser(${u.id}, '${u.username}')" style="padding:0.25rem 0.5rem; font-size:0.8rem">
-                            删除
+                            <i data-feather="trash-2"></i>
                         </button>
                     </div>
                     ` : ''}
@@ -647,8 +726,40 @@ async function loadUsers() {
         });
 
         container.innerHTML = html;
+        if (window.feather) feather.replace();
     } catch (e) {
         container.innerHTML = '<div style="text-align:center; color:var(--danger)">加载失败</div>';
+    }
+}
+
+// Admin Helpers
+function viewUserFiles(userId) {
+    closeModal('adminModal');
+    filterUserId = userId;
+    switchView('gallery');
+    loadImages(1);
+}
+
+async function changeUserPassword(userId) {
+    const p = prompt("请输入新密码 (至少6位):");
+    if (p === null) return;
+    if (p.length < 6) {
+        showToast("密码太短", "error");
+        return;
+    }
+    try {
+        const res = await fetch(`/api/admin/users/${userId}/password`, {
+            method: 'PUT',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ password: p })
+        });
+        if (res.ok) showToast("密码已修改");
+        else {
+            const d = await res.json();
+            showToast(d.error || "失败", "error");
+        }
+    } catch (e) {
+        showToast("网络错误", "error");
     }
 }
 

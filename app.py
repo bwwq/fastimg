@@ -386,14 +386,12 @@ def create_app(config_class=Config):
                 SystemConfig.set(key, value)
             return jsonify({'message': 'Config saved'})
 
-    # Prepare DB on first request (simpler than separate init script for small apps)
-    with app.app_context():
-        db.create_all()
-
     return app
 
 # Expose app for WSGI servers (Gunicorn)
 app = create_app()
 
 if __name__ == '__main__':
+    with app.app_context():
+        db.create_all()
     app.run(debug=True, port=5000)

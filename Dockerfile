@@ -27,4 +27,4 @@ EXPOSE 5000
 # Gunicorn 启动命令
 # 4 workers, gevent worker class (if installed) or sync
 # bind 0.0.0.0:5000
-CMD ["gunicorn", "-w", "4", "-b", "0.0.0.0:5000", "app:app"]
+CMD ["sh", "-c", "python init_db.py && gunicorn -w 4 -b 0.0.0.0:5000 app:app"]

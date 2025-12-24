@@ -1,0 +1,32 @@
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+
+# Flask
+instance/
+.webassets-cache
+
+# Database
+database.db
+*.sqlite3
+
+# Uploads (keep directory but ignore content)
+uploads/*
+!uploads/.gitkeep
+
+# Environment variables
+.env
+
+# IDEs
+.idea/
+.vscode/
+*.swp
+
+# Logs and Debug
+debug_output.txt
+*.log
+
+# System
+.DS_Store
+Thumbs.db

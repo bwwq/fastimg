@@ -1,0 +1,99 @@
+/* ========================================
+   THEME DEFINITIONS
+   ======================================== */
+
+/* Slate - Cool Gray (Default) */
+:root,
+[data-theme="slate"] {
+    --bg-primary: #0f172a;
+    --bg-secondary: #1e293b;
+    --bg-tertiary: #334155;
+    --bg-card: rgba(30, 41, 59, 0.8);
+    --bg-card-hover: rgba(51, 65, 85, 0.9);
+
+    --accent: #3b82f6;
+    --accent-hover: #2563eb;
+    --accent-subtle: rgba(59, 130, 246, 0.15);
+
+    --text-primary: #f8fafc;
+    --text-secondary: #94a3b8;
+    --text-muted: #64748b;
+
+    --border: rgba(148, 163, 184, 0.1);
+    --border-hover: rgba(148, 163, 184, 0.2);
+
+    --danger: #ef4444;
+    --success: #22c55e;
+    --warning: #f59e0b;
+
+    --shadow: 0 4px 6px -1px rgba(0, 0, 0, 0.3);
+    --shadow-lg: 0 10px 15px -3px rgba(0, 0, 0, 0.4);
+
+    --radius-sm: 6px;
+    --radius-md: 10px;
+    --radius-lg: 16px;
+    --radius-xl: 24px;
+}
+
+/* Stone - Warm Gray */
+[data-theme="stone"] {
+    --bg-primary: #1c1917;
+    --bg-secondary: #292524;
+    --bg-tertiary: #44403c;
+    --bg-card: rgba(41, 37, 36, 0.8);
+    --bg-card-hover: rgba(68, 64, 60, 0.9);
+
+    --accent: #f59e0b;
+    --accent-hover: #d97706;
+    --accent-subtle: rgba(245, 158, 11, 0.15);
+
+    --text-primary: #fafaf9;
+    --text-secondary: #a8a29e;
+    --text-muted: #78716c;
+
+    --border: rgba(168, 162, 158, 0.1);
+    --border-hover: rgba(168, 162, 158, 0.2);
+}
+
+/* Zinc - Neutral Gray */
+[data-theme="zinc"] {
+    --bg-primary: #18181b;
+    --bg-secondary: #27272a;
+    --bg-tertiary: #3f3f46;
+    --bg-card: rgba(39, 39, 42, 0.8);
+    --bg-card-hover: rgba(63, 63, 70, 0.9);
+
+    --accent: #10b981;
+    --accent-hover: #059669;
+    --accent-subtle: rgba(16, 185, 129, 0.15);
+
+    --text-primary: #fafafa;
+    --text-secondary: #a1a1aa;
+    --text-muted: #71717a;
+
+    --border: rgba(161, 161, 170, 0.1);
+    --border-hover: rgba(161, 161, 170, 0.2);
+}
+
+/* Light Mode */
+[data-theme="light"] {
+    --bg-primary: #f8fafc;
+    --bg-secondary: #ffffff;
+    --bg-tertiary: #f1f5f9;
+    --bg-card: rgba(255, 255, 255, 0.9);
+    --bg-card-hover: rgba(241, 245, 249, 1);
+
+    --accent: #0ea5e9;
+    --accent-hover: #0284c7;
+    --accent-subtle: rgba(14, 165, 233, 0.1);
+
+    --text-primary: #0f172a;
+    --text-secondary: #475569;
+    --text-muted: #94a3b8;
+
+    --border: rgba(15, 23, 42, 0.08);
+    --border-hover: rgba(15, 23, 42, 0.15);
+
+    --shadow: 0 4px 6px -1px rgba(0, 0, 0, 0.08);
+    --shadow-lg: 0 10px 15px -3px rgba(0, 0, 0, 0.1);
+}

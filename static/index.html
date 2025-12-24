@@ -1,0 +1,345 @@
+<!DOCTYPE html>
+<html lang="zh-CN" data-theme="slate">
+
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>FastImg - 轻量极速图床</title>
+    <!-- CSS Modules -->
+    <link rel="stylesheet" href="static/css/themes.css">
+    <link rel="stylesheet" href="static/css/base.css">
+    <link rel="stylesheet" href="static/css/components.css">
+    <link rel="stylesheet" href="static/css/layout.css">
+    <!-- Icon Font (Feather Icons via CDN for lightweight SVG) -->
+    <script src="https://unpkg.com/feather-icons"></script>
+</head>
+
+<body>
+
+    <div class="app-container">
+
+        <!-- Sidebar (Auth Only) -->
+        <aside class="sidebar hidden" id="sidebar">
+            <div class="brand">
+                <i data-feather="zap"></i> FastImg
+            </div>
+
+            <nav class="nav-links">
+                <div class="nav-item active" onclick="switchView('gallery')">
+                    <i data-feather="grid"></i> 我的图片
+                </div>
+                <div class="nav-item" onclick="switchView('upload')">
+                    <i data-feather="upload-cloud"></i> 上传图片
+                </div>
+                <!-- Admin Link (Injected via JS) -->
+                <div id="adminLink"></div>
+            </nav>
+
+            <div class="user-profile">
+                <div class="user-avatar" id="sidebarAvatar" onclick="openUserSettings()" style="cursor:pointer"
+                    title="账号设置">U</div>
+                <div class="user-info">
+                    <div class="user-name" id="sidebarUsername">Loading...</div>
+                    <div class="user-role" id="sidebarRole">User</div>
+                </div>
+                <button class="btn btn-icon btn-text" onclick="openUserSettings()" title="账号设置">
+                    <i data-feather="settings"></i>
+                </button>
+                <button class="btn btn-icon btn-text" onclick="logout()" title="登出">
+                    <i data-feather="log-out"></i>
+                </button>
+            </div>
+        </aside>
+
+        <!-- Main Content -->
+        <main class="main-content">
+
+            <!-- Unauth Hero -->
+            <section class="hero-wrapper" id="heroSection">
+                <div class="hero-content">
+                    <h1>极简图床<br>Modern Image Host</h1>
+                    <p>轻量、安全、且唯美。记录您的每一个瞬间。</p>
+                    <div style="margin-top: 2rem; display: flex; gap: 1rem; justify-content: center;">
+                        <button class="btn btn-primary btn-lg" onclick="openRegisterModal()">开始使用</button>
+                        <button class="btn btn-secondary btn-lg" onclick="showModal('loginModal')">登录</button>
+                    </div>
+                </div>
+            </section>
+
+            <!-- Dashboard Content (Auth) -->
+            <div id="dashboardSection" class="hidden">
+
+                <!-- Gallery View -->
+                <div id="viewGallery">
+                    <div class="section-header">
+                        <div style="display: flex; align-items: center; gap: 1rem">
+                            <h2>我的图片</h2>
+                            <span class="tag" id="statTotal">0 张图片</span>
+                        </div>
+                        <div class="gallery-controls">
+                            <select id="sortSelect" onchange="changeSortOrder()">
+                                <option value="time_desc">最新上传</option>
+                                <option value="time_asc">最早上传</option>
+                                <option value="size_desc">文件最大</option>
+                                <option value="size_asc">文件最小</option>
+                                <option value="name_asc">名称 A-Z</option>
+                                <option value="name_desc">名称 Z-A</option>
+                            </select>
+                            <div class="view-toggle">
+                                <button id="viewGrid" class="active" onclick="setViewMode('grid')" title="网格视图">
+                                    <i data-feather="grid"></i>
+                                </button>
+                                <button id="viewList" onclick="setViewMode('list')" title="列表视图">
+                                    <i data-feather="list"></i>
+                                </button>
+                            </div>
+                        </div>
+                    </div>
+
+                    <div class="gallery-grid" id="imageGrid">
+                        <!-- JS Rendered -->
+                    </div>
+
+                    <div class="pagination hidden" id="pagination">
+                        <button class="btn btn-secondary" onclick="prevPage()">上一页</button>
+                        <span id="pageIndicator" style="align-self:center">1</span>
+                        <button class="btn btn-secondary" onclick="nextPage()">下一页</button>
+                    </div>
+                </div>
+
+                <!-- Upload View -->
+                <div id="viewUpload" class="hidden">
+                    <div class="section-header">
+                        <h2>上传图片</h2>
+                    </div>
+
+                    <div class="upload-zone" id="dropZone">
+                        <div style="margin-bottom: 1rem">
+                            <i data-feather="upload" style="width: 48px; height: 48px; color: var(--accent)"></i>
+                        </div>
+                        <h3>点击或拖拽上传</h3>
+                        <p>支持批量上传 JPG, PNG, GIF, WEBP</p>
+                        <input type="file" id="fileInput" hidden accept="image/*" multiple>
+                    </div>
+
+                    <!-- Quality Control -->
+                    <div class="card" style="margin-top: 1.5rem; padding: 1.5rem">
+                        <div class="form-group" style="margin-bottom: 0">
+                            <label style="display: flex; justify-content: space-between">
+                                图片压缩质量
+                                <span id="qualityValue" style="font-weight: 600; color: var(--accent)">80%</span>
+                            </label>
+                            <input type="range" id="uploadQuality" value="80" min="10" max="100"
+                                oninput="document.getElementById('qualityValue').innerText = this.value + '%'"
+                                style="width: 100%">
+                            <p style="font-size: 0.85rem; opacity: 0.7; margin-top: 0.5rem">
+                                质量越高文件越大，但画质更好 (管理员设置上限: <span id="maxQualityHint">100</span>%)
+                            </p>
+                        </div>
+                    </div>
+
+                    <!-- Upload Queue -->
+                    <div id="uploadQueue" class="hidden" style="margin-top: 1.5rem">
+                        <h4 style="margin-bottom: 1rem">上传队列</h4>
+                        <div id="queueList" style="display: flex; flex-direction: column; gap: 0.5rem"></div>
+                    </div>
+                </div>
+
+            </div>
+
+        </main>
+    </div>
+
+    <!-- Theme Switcher -->
+    <div class="theme-switcher">
+        <div class="theme-menu hidden" id="themeMenu">
+            <div class="theme-option" onclick="setTheme('slate')">
+                <div class="theme-dot" style="background:#0f172a"></div> Slate
+            </div>
+            <div class="theme-option" onclick="setTheme('stone')">
+                <div class="theme-dot" style="background:#1c1917"></div> Stone
+            </div>
+            <div class="theme-option" onclick="setTheme('zinc')">
+                <div class="theme-dot" style="background:#18181b"></div> Zinc
+            </div>
+            <div class="theme-option" onclick="setTheme('light')">
+                <div class="theme-dot" style="background:#ffffff; border:1px solid #ccc"></div> Light
+            </div>
+        </div>
+        <button class="theme-btn" onclick="toggleThemeMenu()">
+            <i data-feather="moon"></i>
+        </button>
+    </div>
+
+    <!-- Modals -->
+    <div class="modal-overlay" id="loginModal">
+        <div class="modal fade-in">
+            <button class="close-modal" onclick="closeModal('loginModal')">&times;</button>
+            <h2 style="margin-bottom: 2rem">欢迎回来</h2>
+            <form id="loginForm">
+                <div class="form-group">
+                    <label>用户名</label>
+                    <input type="text" name="username" class="input-control" required autocomplete="username">
+                </div>
+                <div class="form-group">
+                    <label>密码</label>
+                    <input type="password" name="password" class="input-control" required
+                        autocomplete="current-password">
+                </div>
+                <button type="submit" class="btn btn-primary btn-block btn-lg">登录</button>
+            </form>
+        </div>
+    </div>
+
+    <div class="modal-overlay" id="registerModal">
+        <div class="modal fade-in">
+            <button class="close-modal" onclick="closeModal('registerModal')">&times;</button>
+            <h2 style="margin-bottom: 2rem">创建账户</h2>
+            <form id="registerForm">
+                <div class="form-group">
+                    <label>用户名</label>
+                    <input type="text" name="username" class="input-control" required autocomplete="username">
+                </div>
+                <div class="form-group">
+                    <label>密码</label>
+                    <input type="password" name="password" class="input-control" required autocomplete="new-password">
+                </div>
+                <button type="submit" class="btn btn-primary btn-block btn-lg">注册</button>
+            </form>
+        </div>
+    </div>
+
+    <!-- Detail Modal -->
+    <div class="modal-overlay" id="detailModal">
+        <div class="modal modal-lg fade-in" style="display:flex; gap:2rem; flex-wrap:wrap">
+            <button class="close-modal" onclick="closeModal('detailModal')">&times;</button>
+
+            <div
+                style="flex:1; min-width:300px; background:var(--bg-tertiary); border-radius:8px; display:flex; align-items:center; justify-content:center;">
+                <img id="detailImg" src="" style="max-width:100%; max-height:60vh; border-radius:4px">
+            </div>
+
+            <div style="flex:1; min-width:300px">
+                <h3 id="detailTitle" style="word-break:break-all">Filename</h3>
+                <div class="tags">
+                    <span class="tag" id="detailSize">0 KB</span>
+                    <span class="tag" id="detailDims">0x0</span>
+                    <span class="tag" id="detailViews">0 Views</span>
+                </div>
+
+                <div class="form-group" style="margin-top:2rem">
+                    <label>直链 (Direct URL)</label>
+                    <div style="display:flex; gap:0.5rem">
+                        <input type="text" id="linkDirect" class="input-control" readonly>
+                        <button class="btn btn-secondary" onclick="copyLink('linkDirect')">复制</button>
+                    </div>
+                </div>
+
+                <div class="form-group">
+                    <label>Markdown</label>
+                    <div style="display:flex; gap:0.5rem">
+                        <input type="text" id="linkMarkdown" class="input-control" readonly>
+                        <button class="btn btn-secondary" onclick="copyLink('linkMarkdown')">复制</button>
+                    </div>
+                </div>
+
+                <div style="margin-top:3rem; text-align:right">
+                    <button class="btn btn-danger" onclick="deleteCurrentImg()">
+                        <i data-feather="trash-2"></i> 删除图片
+                    </button>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <!-- User Settings Modal -->
+    <div id="userModal" class="modal-overlay hidden" onclick="if(event.target===this)closeModal('userModal')">
+        <div class="modal">
+            <div class="modal-header">
+                <h3>账号设置</h3>
+                <button class="close-btn" onclick="closeModal('userModal')">×</button>
+            </div>
+
+            <div
+                style="margin-bottom:2rem; padding:1rem; background:var(--bg-tertiary); border-radius:var(--radius-md)">
+                <div style="font-weight:500; margin-bottom:0.5rem">存储空间使用情况</div>
+                <div style="display:flex; justify-content:space-between; margin-bottom:0.5rem; font-size:0.9rem">
+                    <span id="storageUsed">0 MB</span>
+                    <span id="storageQuota">500 MB</span>
+                </div>
+                <div class="progress-bar-bg">
+                    <div id="storageBar" class="progress-bar-fill" style="width:0%"></div>
+                </div>
+                <div style="margin-top:0.5rem; font-size:0.85rem; color:var(--text-secondary)">
+                    已上传 <span id="imageCount">0</span> 张图片
+                </div>
+            </div>
+
+            <div class="form-group">
+                <label>修改密码</label>
+                <input type="password" id="oldPass" placeholder="当前密码" class="input-control"
+                    style="margin-bottom:0.5rem">
+                <input type="password" id="newPass" placeholder="新密码" class="input-control">
+            </div>
+
+            <div style="margin-top:2rem; text-align:right">
+                <button class="btn btn-primary" onclick="updatePassword()">更新密码</button>
+            </div>
+        </div>
+    </div>
+    </div>
+    </div>
+    </div>
+
+    <!-- Admin Modal -->
+    <div class="modal-overlay" id="adminModal">
+        <div class="modal fade-in" style="max-width:700px">
+            <div class="modal-header">
+                <h3>系统管理</h3>
+                <button class="close-btn" onclick="closeModal('adminModal')">&times;</button>
+            </div>
+
+            <!-- Tabs -->
+            <div class="admin-tabs"
+                style="display:flex; gap:0.5rem; margin-bottom:1.5rem; border-bottom:1px solid var(--border); padding-bottom:0.5rem">
+                <button class="admin-tab active" onclick="switchAdminTab('config')">系统配置</button>
+                <button class="admin-tab" onclick="switchAdminTab('users')">用户管理</button>
+                <button class="admin-tab" onclick="switchAdminTab('invite')">邀请码</button>
+            </div>
+
+            <!-- Config Tab -->
+            <div id="adminTab-config">
+                <form id="adminConfigForm" style="display:flex; flex-direction:column; gap:1rem">
+                    <!-- Injected via JS -->
+                </form>
+                <div style="margin-top: 1.5rem; text-align: right;">
+                    <button class="btn btn-primary" onclick="saveConfig()">保存更改</button>
+                </div>
+            </div>
+
+            <!-- Users Tab -->
+            <div id="adminTab-users" class="hidden">
+                <div id="usersList" style="max-height:400px; overflow-y:auto">
+                    <!-- JS Rendered -->
+                </div>
+            </div>
+
+            <!-- Invite Tab -->
+            <div id="adminTab-invite" class="hidden">
+                <div id="tab-invite">
+                    <!-- JS Rendered -->
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <div class="toast-container" id="toastContainer"></div>
+
+    <script src="static/js/app.js"></script>
+    <script>
+        // Init Feather Icons
+        feather.replace();
+    </script>
+</body>
+
+</html>

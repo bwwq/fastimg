@@ -72,19 +72,21 @@ class SystemConfig(db.Model):
     
     @staticmethod
     def get(key, default=None, type_func=str):
-        conf = SystemConfig.query.get(key)
+        from extensions import db
+        conf = db.session.get(SystemConfig, key)
         if conf:
             try:
                 if type_func == bool:
                     return conf.value.lower() == 'true'
                 return type_func(conf.value)
-            except:
+            except (ValueError, TypeError, AttributeError):
                 return default
         return default
 
     @staticmethod
     def set(key, value, description=None):
-        conf = SystemConfig.query.get(key)
+        from extensions import db
+        conf = db.session.get(SystemConfig, key)
         if not conf:
             conf = SystemConfig(key=key)
             db.session.add(conf)

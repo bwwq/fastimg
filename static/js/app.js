@@ -151,6 +151,7 @@ function switchView(viewName, resetFilter = false) {
 
         if (resetFilter) {
             filterUserId = null;
+            filterUsername = null;
             currentPage = 1;
         }
         loadImages(currentPage);
@@ -165,6 +166,7 @@ function switchView(viewName, resetFilter = false) {
 let currentSort = 'time_desc';
 let currentViewMode = 'grid';
 let filterUserId = null;
+let filterUsername = null;
 
 async function loadImages(page) {
     currentPage = page;
@@ -178,7 +180,7 @@ async function loadImages(page) {
         // Show indicator that we are filtering
         const header = document.querySelector('.gallery-header h2');
         if (header && !header.originalText) header.originalText = header.innerText;
-        if (header) header.innerText = `用户 ${filterUserId} 的图片`;
+        if (header) header.innerText = `${filterUsername || '用户'} 的图片`;
     } else {
         const header = document.querySelector('.gallery-header h2');
         if (header && header.originalText) header.innerText = header.originalText;
@@ -708,7 +710,7 @@ async function loadUsers() {
                     </div>
                     ${!isMe ? `
                     <div class="user-card-actions">
-                        <button class="btn btn-secondary btn-sm" onclick="viewUserFiles(${u.id})" title="查看文件">
+                        <button class="btn btn-secondary btn-sm" onclick="viewUserFiles(${u.id}, '${u.username}')" title="查看文件">
                             <i data-feather="image"></i>
                         </button>
                         <button class="btn btn-secondary btn-sm" onclick="changeUserPassword(${u.id})" title="修改密码">
@@ -738,9 +740,10 @@ async function loadUsers() {
 }
 
 // Admin Helpers
-function viewUserFiles(userId) {
+function viewUserFiles(userId, username) {
     closeModal('adminModal');
     filterUserId = userId;
+    filterUsername = username;
     switchView('gallery');
     loadImages(1);
 }

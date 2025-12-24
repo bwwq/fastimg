@@ -70,16 +70,35 @@ def process_and_save_image(file_storage, user_id, user_quality=None):
         raise ValueError("Invalid image definition")
         
     filename = secure_filename(file_storage.filename)
+    if not filename:
+        filename = "unnamed"
+        
     # 扩展名检查
-    ext = os.path.splitext(filename)[1].lower().lstrip('.')
+    _, ext_part = os.path.splitext(filename)
+    if ext_part:
+        ext = ext_part.lower().lstrip('.')
+    else:
+        # Fallback to original filename for extension extraction if secure_filename stripped it
+        _, orig_ext = os.path.splitext(file_storage.filename)
+        ext = orig_ext.lower().lstrip('.')
+        if not ext and fmt:
+            ext = fmt  # Use magic byte format as extension
+            
     # Split with comma and strip spaces
     allowed_exts_str = SystemConfig.get('ALLOWED_EXTS')
     if not allowed_exts_str:
         allowed_exts_str = 'jpg,jpeg,png,gif,webp'
     allowed_exts = [x.strip() for x in allowed_exts_str.split(',')]
     
-    if ext not in allowed_exts and fmt not in allowed_exts:
-         raise ValueError(f"File type not allowed: {ext}")
+    # 允许的情况：扩展名在白名单，或者（如果扩展名未知/不匹配）Magic头部在白名单
+    # 优先信任 Magic Bytes
+    if fmt not in allowed_exts and ext not in allowed_exts:
+         print(f"DEBUG: Upload Rejected. Ext: {ext}, Fmt: {fmt}, Allowed: {allowed_exts}") # Simple logging
+         raise ValueError(f"File type not allowed: {ext or fmt}")
+    
+    # Ensure correct extension for saving if we're going to rename anyway
+    if not ext and fmt:
+        ext = fmt
 
     # Check Size (0 = Unlimited)
     max_mb_str = SystemConfig.get('MAX_UPLOAD_SIZE')

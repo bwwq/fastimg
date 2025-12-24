@@ -291,12 +291,21 @@ async function loadMaxQuality() {
                 // Load previous settings
                 const savedQuality = localStorage.getItem('uploadQuality');
                 const savedOriginal = localStorage.getItem('originalMode') === 'true';
+                const savedStrict = localStorage.getItem('strictMode') === 'true';
+                const strictCheck = document.getElementById('strictModeCheck');
 
                 if (slider) {
                     slider.max = maxQualityLimit;
                     const wrapper = document.getElementById('qualitySliderWrapper');
 
-                    if (savedOriginal && maxQualityLimit >= 100) {
+                    if (savedStrict && maxQualityLimit >= 100) {
+                        // Restore strict mode
+                        strictCheck.checked = true;
+                        checkbox.checked = true;
+                        checkbox.disabled = true;
+                        wrapper.style.display = 'none';
+                        slider.value = 100;
+                    } else if (savedOriginal && maxQualityLimit >= 100) {
                         checkbox.checked = true;
                         wrapper.style.display = 'none';
                         slider.value = 100;

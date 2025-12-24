@@ -1107,11 +1107,26 @@ async function loadUserStats() {
         const data = await res.json();
 
         const usedMB = (data.used_bytes / 1024 / 1024).toFixed(2);
-        const quotaMB = data.quota_mb;
-        const percent = Math.min((usedMB / quotaMB) * 100, 100);
+
+        // Handle quota display (0 means unlimited)
+        let quotaText = '默认';
+        let percent = 0;
+
+        if (data.quota_bytes === 0) {
+            quotaText = '无限';
+            percent = 0; // Don't show progress bar for unlimited
+        } else if (data.quota_bytes) {
+            const qMB = (data.quota_bytes / 1024 / 1024).toFixed(0);
+            quotaText = `${qMB} MB`;
+            percent = Math.min((data.used_bytes / data.quota_bytes) * 100, 100);
+        } else if (data.quota_mb) {
+            // Fallback for old API just in case
+            quotaText = `${data.quota_mb} MB`;
+            percent = Math.min((usedMB / data.quota_mb) * 100, 100);
+        }
 
         document.getElementById('storageUsed').innerText = `${usedMB} MB`;
-        document.getElementById('storageQuota').innerText = `${quotaMB} MB`;
+        document.getElementById('storageQuota').innerText = quotaText;
         document.getElementById('storageBar').style.width = `${percent}%`;
         document.getElementById('imageCount').innerText = data.image_count;
 

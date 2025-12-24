@@ -182,20 +182,29 @@ def create_app(config_class=Config):
         if current_user.role != 'admin':
             abort(403)
         
-        users = User.query.order_by(User.created_at.desc()).all()
-        result = []
-        for u in users:
-            # Get user stats
-            from sqlalchemy import func
-            used_bytes = db.session.query(func.sum(Image.size)).filter_by(user_id=u.id).scalar() or 0
-            img_count = Image.query.filter_by(user_id=u.id).count()
-            
-            user_data = u.to_dict()
-            user_data['used_bytes'] = used_bytes
-            user_data['image_count'] = img_count
-            result.append(user_data)
+        from sqlalchemy import func
         
-        return jsonify(result)
+        # Optimize: Single query with Left Join & Group By to avoid N+1 problem
+        # Select User, Sum(Image.size), Count(Image.id)
+        query = db.session.query(
+            User,
+            func.sum(Image.size).label('total_size'),
+            func.count(Image.id).label('img_count')
+        ).outerjoin(Image, User.id == Image.user_id)\
+         .group_by(User.id)\
+         .order_by(User.created_at.desc())
+         
+        results = query.all()
+        
+        response_data = []
+        for user, total_size, img_count in results:
+            user_data = user.to_dict()
+            # Handle None result from sum (if no images)
+            user_data['used_bytes'] = total_size or 0
+            user_data['image_count'] = img_count or 0
+            response_data.append(user_data)
+        
+        return jsonify(response_data)
 
     @app.route('/api/admin/users/<int:user_id>', methods=['PUT', 'DELETE'])
     @login_required
@@ -319,7 +328,8 @@ def create_app(config_class=Config):
     def public_config():
         """Public endpoint for non-sensitive config like quality limit"""
         return jsonify({
-            'compress_quality': SystemConfig.get('compress_quality', '80')
+            'compress_quality': SystemConfig.get('compress_quality', '80'),
+            'max_upload_size': SystemConfig.get('MAX_UPLOAD_SIZE', '5')
         })
 
     @app.route('/api/upload', methods=['POST'])

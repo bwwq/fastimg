@@ -323,6 +323,9 @@ async function loadMaxQuality() {
             const data = await res.json();
             if (data.compress_quality) {
                 maxQualityLimit = parseInt(data.compress_quality) || 100;
+                // Save max size for validation (MB to Bytes)
+                window.maxUploadSizeBytes = (parseFloat(data.max_upload_size) || 5) * 1024 * 1024;
+
                 const slider = document.getElementById('uploadQuality');
                 const hint = document.getElementById('maxQualityHint');
                 const checkbox = document.getElementById('originalModeCheck');
@@ -437,6 +440,12 @@ async function uploadFiles(files) {
     queueContainer.classList.remove('hidden');
 
     for (const file of files) {
+        // Pre-check file size
+        if (window.maxUploadSizeBytes && file.size > window.maxUploadSizeBytes) {
+            showToast(`文件 ${file.name} 超过大小限制 (${(window.maxUploadSizeBytes / 1024 / 1024).toFixed(0)}MB)`, 'error');
+            continue;
+        }
+
         const id = 'upload_' + Date.now() + '_' + Math.random().toString(36).substr(2, 5);
         uploadQueue.push({ id, file, quality, passthrough, status: 'pending' });
 
@@ -701,8 +710,9 @@ async function loadAdminConfig() {
             }
 
             // Unit conversion
+            // Unit conversion: Backend stores MB, so we just format it, DO NOT Divide again
             if (item.meta.unit === 'MB' && value !== '') {
-                value = (parseFloat(value) / (1024 * 1024)).toFixed(2);
+                value = parseFloat(value).toFixed(1);
             }
 
             let inputHtml = '';

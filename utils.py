@@ -69,6 +69,8 @@ def process_and_save_image(file_storage, user_id, user_quality=None, passthrough
     if not fmt:
         raise ValueError("Invalid image definition")
         
+    # 保留原始文件名（含中文），用于前端显示
+    original_name = file_storage.filename.rsplit('/', 1)[-1].rsplit('\\', 1)[-1].strip() or "unnamed"
     filename = secure_filename(file_storage.filename)
     if not filename:
         filename = "unnamed"
@@ -130,7 +132,7 @@ def process_and_save_image(file_storage, user_id, user_quality=None, passthrough
         
         return {
             'filename': unique_name,
-            'original_name': filename,
+            'original_name': original_name,
             'size': size,
             'width': width,
             'height': height,
@@ -190,7 +192,7 @@ def process_and_save_image(file_storage, user_id, user_quality=None, passthrough
     
     return {
         'filename': unique_name,
-        'original_name': filename,
+        'original_name': original_name,
         'size': file_size,
         'width': width,
         'height': height,

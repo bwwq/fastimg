@@ -4,6 +4,14 @@ let currentPage = 1;
 let currentImage = null;
 let csrfToken = null;
 
+// Multi-select state
+let isSelectMode = false;
+let selectedImages = new Map(); // id -> {filename, original_name}
+let loadedImages = []; // Cache loaded image data for selection
+
+// Batch upload state
+let batchModalActive = false;
+
 // DOM Cache
 const dom = {
     sidebar: document.getElementById('sidebar'),
@@ -237,26 +245,39 @@ async function loadImages(page) {
             dom.galleryGrid.innerHTML = '<p style="grid-column:1/-1;text-align:center;margin-top:2rem;opacity:0.7">暂无图片，去上传一张吧</p>';
         }
 
+        loadedImages = data.images; // Cache for multi-select
+
         data.images.forEach((img, index) => {
             const div = document.createElement('div');
             div.className = 'img-card fade-in';
             div.style.animationDelay = `${index * 0.05}s`;
+            div.dataset.imgId = img.id;
 
             const sizeStr = img.size > 1024 * 1024
                 ? (img.size / (1024 * 1024)).toFixed(1) + ' MB'
                 : (img.size / 1024).toFixed(1) + ' KB';
 
+            const isSelected = selectedImages.has(img.id);
+
+            const safeName = escapeHtml(img.original_name);
+
             div.innerHTML = `
-            <img src="/i/${img.filename}" loading="lazy" alt="${img.original_name}">
+            ${isSelectMode ? `<div class="img-select-check ${isSelected ? 'checked' : ''}" data-id="${img.id}"><i data-feather="check"></i></div>` : ''}
+            <img src="/i/${img.filename}" loading="lazy" alt="${safeName}">
             <div class="img-overlay">
-                <div class="img-name">${img.original_name}</div>
+                <div class="img-name">${safeName}</div>
                 <div class="img-meta">
                     <span>${sizeStr}</span>
                     <span>${img.width}×${img.height}</span>
                 </div>
             </div>
         `;
-            div.onclick = () => showDetail(img);
+            if (isSelectMode) {
+                if (isSelected) div.classList.add('selected');
+                div.onclick = () => toggleImageSelect(img);
+            } else {
+                div.onclick = () => showDetail(img);
+            }
             dom.galleryGrid.appendChild(div);
         });
 
@@ -423,7 +444,7 @@ async function uploadFiles(files) {
     let quality = 80;
     const isOriginal = document.getElementById('originalModeCheck')?.checked;
     const isStrict = document.getElementById('strictModeCheck')?.checked;
-    const passthrough = isStrict; // Only strict mode triggers passthrough
+    const passthrough = isStrict;
 
     if (isOriginal || isStrict) {
         quality = 100;
@@ -434,38 +455,69 @@ async function uploadFiles(files) {
         );
     }
 
-    // Add to queue
-    const queueContainer = document.getElementById('uploadQueue');
-    const queueList = document.getElementById('queueList');
-    queueContainer.classList.remove('hidden');
-
+    // Pre-filter: skip oversized files, collect valid ones
+    const validFiles = [];
     for (const file of files) {
-        // Pre-check file size
         if (window.maxUploadSizeBytes && file.size > window.maxUploadSizeBytes) {
             showToast(`文件 ${file.name} 超过大小限制 (${(window.maxUploadSizeBytes / 1024 / 1024).toFixed(0)}MB)`, 'error');
             continue;
         }
+        validFiles.push(file);
+    }
+    if (validFiles.length === 0) return;
 
+    // Decide whether to show batch modal (for 2+ valid files)
+    const useBatchModal = validFiles.length >= 2;
+    if (useBatchModal) {
+        openBatchModal(validFiles.length);
+    }
+
+    // Add to queue
+    const queueContainer = document.getElementById('uploadQueue');
+    const queueList = document.getElementById('queueList');
+    if (!useBatchModal) {
+        queueContainer.classList.remove('hidden');
+    }
+
+    for (const file of validFiles) {
         const id = 'upload_' + Date.now() + '_' + Math.random().toString(36).substr(2, 5);
         uploadQueue.push({ id, file, quality, passthrough, status: 'pending' });
+        const safeName = escapeHtml(file.name);
 
-        // Add UI element
-        const el = document.createElement('div');
-        el.id = id;
-        el.className = 'card';
-        el.style.cssText = 'padding: 0.75rem 1rem; display: flex; align-items: center; gap: 1rem';
-        el.innerHTML = `
-            <div style="flex:1; min-width:0">
-                <div style="display:flex; justify-content:space-between; margin-bottom:0.25rem">
-                    <div style="overflow:hidden; text-overflow:ellipsis; white-space:nowrap; max-width:70%">${file.name}</div>
-                    <div class="upload-status" style="font-size:0.85rem; color:var(--text-secondary)">等待中</div>
+        if (useBatchModal) {
+            const el = document.createElement('div');
+            el.id = id;
+            el.className = 'batch-file-item';
+            el.innerHTML = `
+                <div style="flex:1; min-width:0">
+                    <div style="display:flex; justify-content:space-between; margin-bottom:0.25rem">
+                        <div style="overflow:hidden; text-overflow:ellipsis; white-space:nowrap; max-width:70%">${safeName}</div>
+                        <div class="upload-status" style="font-size:0.85rem; color:var(--text-secondary)">等待中</div>
+                    </div>
+                    <div class="progress-bar-bg" style="height:4px; border-radius:2px">
+                        <div class="progress-bar-fill" style="width:0%"></div>
+                    </div>
                 </div>
-                <div class="progress-bar-bg" style="height:4px; border-radius:2px">
-                    <div class="progress-bar-fill" style="width:0%"></div>
+            `;
+            document.getElementById('batchFileList').appendChild(el);
+        } else {
+            const el = document.createElement('div');
+            el.id = id;
+            el.className = 'card';
+            el.style.cssText = 'padding: 0.75rem 1rem; display: flex; align-items: center; gap: 1rem';
+            el.innerHTML = `
+                <div style="flex:1; min-width:0">
+                    <div style="display:flex; justify-content:space-between; margin-bottom:0.25rem">
+                        <div style="overflow:hidden; text-overflow:ellipsis; white-space:nowrap; max-width:70%">${safeName}</div>
+                        <div class="upload-status" style="font-size:0.85rem; color:var(--text-secondary)">等待中</div>
+                    </div>
+                    <div class="progress-bar-bg" style="height:4px; border-radius:2px">
+                        <div class="progress-bar-fill" style="width:0%"></div>
+                    </div>
                 </div>
-            </div>
-        `;
-        queueList.appendChild(el);
+            `;
+            queueList.appendChild(el);
+        }
     }
 
     processQueue();
@@ -513,14 +565,15 @@ async function processQueue() {
         if (xhr.status >= 200 && xhr.status < 300) {
             const img = JSON.parse(xhr.responseText);
             pending.status = 'done';
+            pending.result = img; // Save result for batch copy
             if (statusEl) {
                 statusEl.textContent = '完成';
                 statusEl.style.color = 'var(--success)';
             }
             if (progressEl) progressEl.style.width = '100%';
 
-            // If only one file, show detail
-            if (uploadQueue.length === 1) {
+            // If only one file and no batch modal, show detail
+            if (uploadQueue.length === 1 && !batchModalActive) {
                 showDetail(img);
             }
         } else {
@@ -557,28 +610,56 @@ async function processQueue() {
 }
 
 function checkNext() {
-    // Process next in queue (extracted helper)
-
-    // Process next in queue
+    const total = uploadQueue.length;
+    const doneCount = uploadQueue.filter(u => u.status === 'done').length;
+    const errorCount = uploadQueue.filter(u => u.status === 'error').length;
     const remaining = uploadQueue.filter(u => u.status === 'pending').length;
+
+    // Update batch modal progress
+    if (batchModalActive) {
+        const completed = doneCount + errorCount;
+        document.getElementById('batchProgressCount').textContent = `${completed}/${total}`;
+        document.getElementById('batchProgressBar').style.width = `${(completed / total) * 100}%`;
+        document.getElementById('batchProgressText').textContent = remaining > 0 ? '上传中...' : '上传完成';
+    }
+
     if (remaining > 0) {
         processQueue();
     } else {
         // All done
-        const doneCount = uploadQueue.filter(u => u.status === 'done').length;
-        const errorCount = uploadQueue.filter(u => u.status === 'error').length;
         if (doneCount > 0) {
-            showToast(`上传完成: ${doneCount} 成功${errorCount > 0 ? ', ' + errorCount + ' 失败' : ''}`);
             loadImages(1); // Refresh gallery
-        } else if (errorCount > 0) {
-            showToast(`上传失败: ${errorCount} 个文件`, 'error');
         }
-        // Clear queue after a delay
-        setTimeout(() => {
-            uploadQueue = [];
-            document.getElementById('queueList').innerHTML = '';
-            document.getElementById('uploadQueue').classList.add('hidden');
-        }, 3000);
+
+        if (batchModalActive) {
+            // Generate result text in batch modal
+            const lines = uploadQueue
+                .filter(u => u.status === 'done' && u.result)
+                .map(u => `${u.result.original_name} ${window.location.origin}/i/${u.result.filename}`);
+            
+            const resultArea = document.getElementById('batchResultArea');
+            const resultText = document.getElementById('batchResultText');
+            resultText.value = lines.join('\n');
+            resultArea.classList.remove('hidden');
+
+            document.getElementById('batchProgressText').textContent =
+                `上传完成: ${doneCount} 成功${errorCount > 0 ? ', ' + errorCount + ' 失败' : ''}`;
+            document.getElementById('batchModalCloseBtn').style.display = '';
+
+            if (window.feather) feather.replace();
+        } else {
+            if (doneCount > 0) {
+                showToast(`上传完成: ${doneCount} 成功${errorCount > 0 ? ', ' + errorCount + ' 失败' : ''}`);
+            } else if (errorCount > 0) {
+                showToast(`上传失败: ${errorCount} 个文件`, 'error');
+            }
+            // Clear inline queue after a delay
+            setTimeout(() => {
+                uploadQueue = [];
+                document.getElementById('queueList').innerHTML = '';
+                document.getElementById('uploadQueue').classList.add('hidden');
+            }, 3000);
+        }
     }
 }
 
@@ -603,6 +684,25 @@ function setupEventListeners() {
 
     zone.onclick = () => input.click();
     input.onchange = (e) => uploadFiles(e.target.files);
+
+    // Folder input
+    const folderInput = document.getElementById('folderInput');
+    if (folderInput) {
+        folderInput.onchange = (e) => {
+            const allFiles = Array.from(e.target.files);
+            const imageExts = ['jpg', 'jpeg', 'png', 'gif', 'webp'];
+            const imageFiles = allFiles.filter(f => {
+                const ext = f.name.split('.').pop().toLowerCase();
+                return imageExts.includes(ext);
+            });
+            if (imageFiles.length === 0) {
+                showToast('文件夹中没有找到支持的图片文件', 'error');
+                return;
+            }
+            uploadFiles(imageFiles);
+            folderInput.value = ''; // Reset
+        };
+    }
 
     zone.ondragover = (e) => { e.preventDefault(); zone.classList.add('dragover'); };
     zone.ondragleave = () => zone.classList.remove('dragover');
@@ -1225,9 +1325,114 @@ function showToast(msg, type = 'success') {
     setTimeout(() => el.remove(), 3000);
 }
 
+function escapeHtml(str) {
+    const div = document.createElement('div');
+    div.textContent = str;
+    return div.innerHTML;
+}
+
 // Overlay click close
 window.onclick = (e) => {
     if (e.target.classList.contains('modal-overlay')) {
+        // Don't close batch modal by clicking overlay during upload
+        if (e.target.id === 'batchUploadModal' && batchModalActive) return;
         e.target.classList.remove('active');
     }
+}
+
+// --- Batch Upload Modal ---
+function openBatchModal(totalCount) {
+    batchModalActive = true;
+    document.getElementById('batchFileList').innerHTML = '';
+    document.getElementById('batchResultArea').classList.add('hidden');
+    document.getElementById('batchResultText').value = '';
+    document.getElementById('batchProgressCount').textContent = `0/${totalCount}`;
+    document.getElementById('batchProgressBar').style.width = '0%';
+    document.getElementById('batchProgressText').textContent = '准备上传...';
+    document.getElementById('batchModalCloseBtn').style.display = 'none'; // Hide close during upload
+    showModal('batchUploadModal');
+}
+
+function closeBatchModal() {
+    closeModal('batchUploadModal');
+    batchModalActive = false;
+    // Clear queue
+    uploadQueue = [];
+    document.getElementById('batchFileList').innerHTML = '';
+    document.getElementById('queueList').innerHTML = '';
+    document.getElementById('uploadQueue').classList.add('hidden');
+}
+
+function copyBatchResult() {
+    const textarea = document.getElementById('batchResultText');
+    textarea.select();
+    textarea.setSelectionRange(0, 99999);
+    navigator.clipboard.writeText(textarea.value).then(() => {
+        showToast('已复制到剪贴板');
+    }).catch(() => {
+        document.execCommand('copy');
+        showToast('已复制到剪贴板');
+    });
+}
+
+// --- Multi-Select Mode ---
+function toggleSelectMode() {
+    isSelectMode = !isSelectMode;
+    const btn = document.getElementById('btnSelectMode');
+    const bar = document.getElementById('selectActionBar');
+
+    if (isSelectMode) {
+        btn.classList.add('active');
+        bar.classList.remove('hidden');
+    } else {
+        btn.classList.remove('active');
+        bar.classList.add('hidden');
+        selectedImages.clear();
+    }
+    // Re-render gallery to show/hide checkboxes
+    loadImages(currentPage);
+}
+
+function toggleImageSelect(img) {
+    if (selectedImages.has(img.id)) {
+        selectedImages.delete(img.id);
+    } else {
+        selectedImages.set(img.id, { filename: img.filename, original_name: img.original_name });
+    }
+    updateSelectUI();
+    loadImages(currentPage);
+}
+
+function updateSelectUI() {
+    document.getElementById('selectCount').textContent = `已选 ${selectedImages.size} 张`;
+}
+
+function clearSelection() {
+    selectedImages.clear();
+    updateSelectUI();
+    loadImages(currentPage);
+}
+
+function copySelectedLinks() {
+    if (selectedImages.size === 0) {
+        showToast('请先选择至少一张图片', 'error');
+        return;
+    }
+    const lines = [];
+    selectedImages.forEach((info) => {
+        lines.push(`${info.original_name} ${window.location.origin}/i/${info.filename}`);
+    });
+    const text = lines.join('\n');
+    navigator.clipboard.writeText(text).then(() => {
+        showToast(`已复制 ${selectedImages.size} 张图片的链接`);
+    }).catch(() => {
+        // Fallback
+        const ta = document.createElement('textarea');
+        ta.value = text;
+        document.body.appendChild(ta);
+        ta.select();
+        document.execCommand('copy');
+        document.body.removeChild(ta);
+        showToast(`已复制 ${selectedImages.size} 张图片的链接`);
+    });
 }

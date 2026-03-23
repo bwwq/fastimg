@@ -94,6 +94,9 @@
                                     <i data-feather="list"></i>
                                 </button>
                             </div>
+                            <button id="btnSelectMode" class="btn btn-secondary btn-sm" onclick="toggleSelectMode()" title="多选模式">
+                                <i data-feather="check-square"></i> 多选
+                            </button>
                         </div>
                     </div>
 
@@ -105,6 +108,17 @@
                         <button class="btn btn-secondary" onclick="prevPage()">上一页</button>
                         <span id="pageIndicator" style="align-self:center">1</span>
                         <button class="btn btn-secondary" onclick="nextPage()">下一页</button>
+                    </div>
+
+                    <!-- Multi-select floating bar -->
+                    <div id="selectActionBar" class="select-action-bar hidden">
+                        <span id="selectCount">已选 0 张</span>
+                        <button class="btn btn-primary btn-sm" onclick="copySelectedLinks()">
+                            <i data-feather="copy"></i> 复制链接
+                        </button>
+                        <button class="btn btn-secondary btn-sm" onclick="clearSelection()">
+                            <i data-feather="x"></i> 取消选择
+                        </button>
                     </div>
                 </div>
 
@@ -121,6 +135,13 @@
                         <h3>点击或拖拽上传</h3>
                         <p>支持批量上传 JPG, PNG, GIF, WEBP</p>
                         <input type="file" id="fileInput" hidden accept="image/*" multiple>
+                    </div>
+
+                    <div style="margin-top: 1rem; text-align: center">
+                        <button class="btn btn-secondary" onclick="document.getElementById('folderInput').click()">
+                            <i data-feather="folder"></i> 选择文件夹上传
+                        </button>
+                        <input type="file" id="folderInput" hidden webkitdirectory accept="image/*">
                     </div>
 
                     <!-- Quality Control -->
@@ -349,6 +370,35 @@
                 <div id="tab-invite">
                     <!-- JS Rendered -->
                 </div>
+            </div>
+        </div>
+    </div>
+
+    <!-- Batch Upload Progress Modal -->
+    <div class="modal-overlay" id="batchUploadModal">
+        <div class="modal fade-in" style="max-width:600px">
+            <div class="modal-header">
+                <h3>批量上传</h3>
+                <button class="close-btn" id="batchModalCloseBtn" onclick="closeBatchModal()">&times;</button>
+            </div>
+            <div id="batchProgress" style="margin-bottom:1rem">
+                <div style="display:flex; justify-content:space-between; margin-bottom:0.5rem">
+                    <span id="batchProgressText">准备上传...</span>
+                    <span id="batchProgressCount">0/0</span>
+                </div>
+                <div class="progress-bar-bg">
+                    <div id="batchProgressBar" class="progress-bar-fill" style="width:0%; transition: width 0.3s"></div>
+                </div>
+            </div>
+            <div id="batchFileList" class="batch-file-list" style="max-height:300px; overflow-y:auto; display:flex; flex-direction:column; gap:0.5rem">
+                <!-- JS Rendered -->
+            </div>
+            <div id="batchResultArea" class="hidden" style="margin-top:1.5rem">
+                <label style="display:block; margin-bottom:0.5rem; font-weight:500">上传结果 (文件名 + 链接)</label>
+                <textarea id="batchResultText" class="input-control" readonly rows="6" style="font-family:monospace; font-size:0.85rem; resize:vertical"></textarea>
+                <button class="btn btn-primary" style="margin-top:0.75rem; width:100%" onclick="copyBatchResult()">
+                    <i data-feather="copy"></i> 一键复制
+                </button>
             </div>
         </div>
     </div>

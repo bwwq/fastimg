@@ -538,3 +538,102 @@
     font-weight: 600;
     color: var(--text-secondary);
 }
+
+/* ========================================
+   BATCH UPLOAD & MULTI-SELECT
+   ======================================== */
+
+/* Batch file list item */
+.batch-file-item {
+    padding: 0.75rem 1rem;
+    display: flex;
+    align-items: center;
+    gap: 1rem;
+    background: var(--bg-tertiary);
+    border-radius: var(--radius-sm);
+}
+
+/* Multi-select checkbox overlay on image cards */
+.img-select-check {
+    position: absolute;
+    top: 0.5rem;
+    left: 0.5rem;
+    width: 28px;
+    height: 28px;
+    border-radius: 50%;
+    background: rgba(0, 0, 0, 0.5);
+    border: 2px solid rgba(255, 255, 255, 0.6);
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    z-index: 10;
+    cursor: pointer;
+    transition: all 0.2s;
+    color: transparent;
+}
+
+.img-select-check.checked {
+    background: var(--accent);
+    border-color: var(--accent);
+    color: white;
+}
+
+.img-select-check svg {
+    width: 16px;
+    height: 16px;
+}
+
+/* Selected card border glow */
+.img-card.selected {
+    outline: 3px solid var(--accent);
+    outline-offset: -3px;
+}
+
+.img-card.selected::after {
+    content: '';
+    position: absolute;
+    inset: 0;
+    background: rgba(var(--accent-rgb, 99, 102, 241), 0.1);
+    pointer-events: none;
+    border-radius: inherit;
+}
+
+/* Multi-select floating action bar */
+.select-action-bar {
+    position: fixed;
+    bottom: 2rem;
+    left: 50%;
+    transform: translateX(-50%);
+    background: var(--bg-secondary);
+    border: 1px solid var(--border);
+    border-radius: var(--radius-lg);
+    padding: 0.75rem 1.5rem;
+    display: flex;
+    align-items: center;
+    gap: 1rem;
+    box-shadow: var(--shadow-lg);
+    z-index: 900;
+    animation: slideUp 0.3s ease;
+}
+
+.select-action-bar span {
+    font-weight: 500;
+    color: var(--text-primary);
+    white-space: nowrap;
+}
+
+@keyframes slideUp {
+    from {
+        opacity: 0;
+        transform: translateX(-50%) translateY(20px);
+    }
+    to {
+        opacity: 1;
+        transform: translateX(-50%) translateY(0);
+    }
+}
+
+.btn-sm {
+    padding: 0.4rem 0.8rem;
+    font-size: 0.85rem;
+}

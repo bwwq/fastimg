@@ -810,10 +810,75 @@ function setupEventListeners() {
 
     zone.ondragover = (e) => { e.preventDefault(); zone.classList.add('dragover'); };
     zone.ondragleave = () => zone.classList.remove('dragover');
-    zone.ondrop = (e) => {
+    zone.ondrop = async (e) => {
         e.preventDefault();
         zone.classList.remove('dragover');
-        uploadFiles(e.dataTransfer.files);
+        
+        let files = [];
+        if (e.dataTransfer.items) {
+            const items = Array.from(e.dataTransfer.items);
+            
+            const traverseFileTree = async (item, path) => {
+                if (item.isFile) {
+                    return new Promise((resolve) => {
+                        item.file((file) => {
+                            // If path is not empty, we attach the relative directory path
+                            if (path) {
+                                Object.defineProperty(file, 'webkitRelativePath', {
+                                    value: path + file.name,
+                                    writable: false
+                                });
+                            }
+                            const ext = file.name.split('.').pop().toLowerCase();
+                            if (['jpg', 'jpeg', 'png', 'gif', 'webp'].includes(ext)) {
+                                files.push(file);
+                            }
+                            resolve();
+                        });
+                    });
+                } else if (item.isDirectory) {
+                    const dirReader = item.createReader();
+                    return new Promise((resolve) => {
+                        // Read all entries in the directory (needs loop for > 100 entries but usually fastimg use case is small)
+                        dirReader.readEntries(async (entries) => {
+                            const entryPromises = entries.map(ent => traverseFileTree(ent, path + item.name + "/"));
+                            await Promise.all(entryPromises);
+                            resolve();
+                        });
+                    });
+                }
+            };
+            
+            const promises = items.map(item => {
+                if (item.kind === 'file') {
+                    const entry = item.webkitGetAsEntry ? item.webkitGetAsEntry() : null;
+                    if (entry) {
+                        return traverseFileTree(entry, "");
+                    } else {
+                        const f = item.getAsFile();
+                        if (f) {
+                            const ext = f.name.split('.').pop().toLowerCase();
+                            if (['jpg', 'jpeg', 'png', 'gif', 'webp'].includes(ext)) files.push(f);
+                        }
+                        return Promise.resolve();
+                    }
+                }
+                return Promise.resolve();
+            });
+            await Promise.all(promises);
+            
+        } else {
+            files = Array.from(e.dataTransfer.files).filter(f => {
+                const ext = f.name.split('.').pop().toLowerCase();
+                return ['jpg', 'jpeg', 'png', 'gif', 'webp'].includes(ext);
+            });
+        }
+        
+        if (files.length > 0) {
+            uploadFiles(files);
+        } else {
+            showToast('未找到支持的图片文件', 'error');
+        }
     };
 
     document.onpaste = (e) => {

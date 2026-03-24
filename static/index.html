@@ -128,33 +128,40 @@
 
                         <!-- Gallery View -->
                         <div id="viewGallery">
-                            <div class="section-header">
-                                <div>
-                                    <h2>所有媒体</h2>
-                                    <p class="section-subtitle"><span id="statTotal">0 张图片</span> • 上传于云端</p>
-                                </div>
-                                <div class="gallery-controls">
-                                    <select id="sortSelect" onchange="changeSortOrder()">
-                                        <option value="time_desc">最新上传</option>
-                                        <option value="time_asc">最早上传</option>
-                                        <option value="size_desc">文件最大</option>
-                                        <option value="size_asc">文件最小</option>
-                                        <option value="name_asc">名称 A-Z</option>
-                                        <option value="name_desc">名称 Z-A</option>
-                                    </select>
-                                    <div class="view-toggle">
-                                        <button id="viewGrid" class="active" onclick="setViewMode('grid')"
-                                            title="网格视图">
-                                            <i data-lucide="layout-grid"></i>
-                                        </button>
-                                        <button id="viewList" onclick="setViewMode('list')" title="列表视图">
-                                            <i data-lucide="list"></i>
+                            <div class="section-header" style="flex-direction: column; align-items: flex-start; gap: 0.5rem;">
+                                <div style="width: 100%; display: flex; justify-content: space-between; align-items: flex-start;">
+                                    <div>
+                                        <h2>所有媒体</h2>
+                                        <p class="section-subtitle"><span id="statTotal">0 张图片</span> • 上传于云端</p>
+                                    </div>
+                                    <div class="gallery-controls">
+                                        <select id="sortSelect" onchange="changeSortOrder()">
+                                            <option value="time_desc">最新上传</option>
+                                            <option value="time_asc">最早上传</option>
+                                            <option value="size_desc">文件最大</option>
+                                            <option value="size_asc">文件最小</option>
+                                            <option value="name_asc">名称 A-Z</option>
+                                            <option value="name_desc">名称 Z-A</option>
+                                        </select>
+                                        <div class="view-toggle">
+                                            <button id="viewGrid" class="active" onclick="setViewMode('grid')"
+                                                title="网格视图">
+                                                <i data-lucide="layout-grid"></i>
+                                            </button>
+                                            <button id="viewList" onclick="setViewMode('list')" title="列表视图">
+                                                <i data-lucide="list"></i>
+                                            </button>
+                                        </div>
+                                        <button id="btnSelectMode" class="btn btn-secondary btn-sm"
+                                            onclick="toggleSelectMode()" title="多选模式">
+                                            <i data-lucide="check-square"></i> 多选
                                         </button>
                                     </div>
-                                    <button id="btnSelectMode" class="btn btn-secondary btn-sm"
-                                        onclick="toggleSelectMode()" title="多选模式">
-                                        <i data-lucide="check-square"></i> 多选
-                                    </button>
+                                </div>
+                                <div id="breadcrumbs" class="breadcrumbs">
+                                    <div class="crumb active" onclick="openFolder(null)">
+                                        <i data-lucide="home" style="width: 14px; height: 14px;"></i> 首页
+                                    </div>
                                 </div>
                             </div>
 

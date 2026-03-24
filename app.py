@@ -6,7 +6,7 @@ from flask_login import login_user, logout_user, login_required, current_user
 from flask_wtf.csrf import CSRFProtect, generate_csrf, CSRFError
 from config import Config
 from extensions import db, login_manager, limiter, migrate
-from models import User, Image, ImageStat, SystemConfig, InviteCode
+from models import User, Image, ImageStat, SystemConfig, InviteCode, Folder
 from utils import process_and_save_image
 
 csrf = CSRFProtect()
@@ -34,6 +34,21 @@ def _ensure_db_compatible(app):
         return cursor.fetchone() is not None
 
     try:
+        if not has_table('folder'):
+            cursor.execute("""
+                CREATE TABLE folder (
+                    id INTEGER NOT NULL PRIMARY KEY,
+                    name VARCHAR(256) NOT NULL,
+                    parent_id INTEGER REFERENCES folder(id),
+                    user_id INTEGER NOT NULL REFERENCES user(id),
+                    created_at DATETIME
+                )
+            """)
+
+        if has_table('image'):
+            if not has_column('image', 'folder_id'):
+                cursor.execute("ALTER TABLE image ADD COLUMN folder_id INTEGER REFERENCES folder(id)")
+
         if has_table('user'):
             if not has_column('user', 'is_active_user'):
                 cursor.execute("ALTER TABLE user ADD COLUMN is_active_user BOOLEAN DEFAULT 1")
@@ -408,6 +423,21 @@ def create_app(config_class=Config):
             # Process and Save to Disk
             meta = process_and_save_image(file, current_user.id, user_quality=user_quality, passthrough=passthrough)
             
+            # Folder path resolution
+            folder_id = request.form.get('folder_id', type=int)
+            path_str = request.form.get('path', '').strip('/')
+            if path_str:
+                parts = [p for p in path_str.split('/') if p]
+                current_parent_id = folder_id
+                for part in parts:
+                    folder = db.session.query(Folder).filter_by(user_id=current_user.id, name=part, parent_id=current_parent_id).first()
+                    if not folder:
+                        folder = Folder(name=part, user_id=current_user.id, parent_id=current_parent_id)
+                        db.session.add(folder)
+                        db.session.flush() # To get folder.id immediately
+                    current_parent_id = folder.id
+                folder_id = current_parent_id
+            
             # Save to DB
             image = Image(
                 filename=meta['filename'],
@@ -416,7 +446,8 @@ def create_app(config_class=Config):
                 width=meta['width'],
                 height=meta['height'],
                 mime_type=meta['mime_type'],
-                user_id=current_user.id
+                user_id=current_user.id,
+                folder_id=folder_id
             )
             # Create Stat
             image.stats = ImageStat()
@@ -426,6 +457,7 @@ def create_app(config_class=Config):
             
             return jsonify(image.to_dict()), 201
         except ValueError as e:
+            db.session.rollback()
             app.logger.warning(f"Upload rejected: {e}")
             return jsonify({'error': str(e)}), 400
         except Exception as e:
@@ -439,6 +471,7 @@ def create_app(config_class=Config):
         per_page = 20
         sort_by = request.args.get('sort', 'time')  # time, size, name
         order = request.args.get('order', 'desc')  # asc, desc
+        req_folder_id = request.args.get('folder_id', type=int)
         
         query = Image.query
         
@@ -446,12 +479,12 @@ def create_app(config_class=Config):
         target_user_id = request.args.get('user_id', type=int)
 
         if current_user.is_authenticated:
-            if current_user.role == 'admin' and target_user_id:
-                query = query.filter_by(user_id=target_user_id)
-            else:
-                query = query.filter_by(user_id=current_user.id)
+            actual_user_id = target_user_id if (current_user.role == 'admin' and target_user_id) else current_user.id
+            query = query.filter_by(user_id=actual_user_id)
         else:
             return jsonify({'error': 'Login required'}), 401
+            
+        query = query.filter_by(folder_id=req_folder_id)
         
         # Determine sort column
         if sort_by == 'size':
@@ -469,7 +502,25 @@ def create_app(config_class=Config):
             
         pag = query.paginate(page=page, per_page=per_page)
         
+        # Determine folders in current directory
+        folders = db.session.query(Folder).filter_by(user_id=actual_user_id, parent_id=req_folder_id).order_by(Folder.name.asc()).all()
+        
+        # Determine breadcrumbs
+        breadcrumbs = [{'id': None, 'name': '首页'}]
+        curr = req_folder_id
+        path_nodes = []
+        while curr:
+            f = db.session.get(Folder, curr)
+            if not f or f.user_id != actual_user_id:
+                break
+            path_nodes.insert(0, {'id': f.id, 'name': f.name})
+            curr = f.parent_id
+        breadcrumbs.extend(path_nodes)
+        
         return jsonify({
+            'current_folder': db.session.get(Folder, req_folder_id).to_dict() if req_folder_id else None,
+            'breadcrumbs': breadcrumbs,
+            'folders': [f.to_dict() for f in folders],
             'images': [i.to_dict() for i in pag.items],
             'total': pag.total,
             'pages': pag.pages,

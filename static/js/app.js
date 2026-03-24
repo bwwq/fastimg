@@ -225,8 +225,14 @@ let currentSort = 'time_desc';
 let currentViewMode = 'grid';
 let filterUserId = null;
 let filterUsername = null;
+let currentFolderId = null;
 
 let lastLoadImagesTimestamp = 0;
+
+window.openFolder = function(id) {
+    currentFolderId = id;
+    loadImages(1);
+};
 
 async function loadImages(page) {
     const timestamp = Date.now();
@@ -254,8 +260,11 @@ async function loadImages(page) {
     dom.galleryGrid.style.pointerEvents = 'none'; // Prevent clicks while loading
 
     try {
+        if (currentFolderId) {
+            url += `&folder_id=${currentFolderId}`;
+        }
+
         const res = await fetch(url);
-        // Race condition check: if a newer request started, ignore this one
         if (timestamp !== lastLoadImagesTimestamp) return;
 
         const data = await res.json();
@@ -264,9 +273,43 @@ async function loadImages(page) {
         dom.galleryGrid.style.opacity = '1';
         dom.galleryGrid.style.pointerEvents = 'auto';
 
-        if (data.images.length === 0) {
-            dom.galleryGrid.innerHTML = '<p style="grid-column:1/-1;text-align:center;margin-top:2rem;opacity:0.7">暂无图片，去上传一张吧</p>';
+        // Render Breadcrumbs
+        const breadcrumbsEl = document.getElementById('breadcrumbs');
+        if (breadcrumbsEl && data.breadcrumbs) {
+            breadcrumbsEl.innerHTML = data.breadcrumbs.map((b, idx) => `
+                <div class="crumb ${idx === data.breadcrumbs.length - 1 ? 'active' : ''}" onclick="window.openFolder(${b.id || 'null'})">
+                    ${idx === 0 ? '<i data-lucide="home" style="width: 14px; height: 14px; flex-shrink: 0;"></i> ' : ''}${escapeHtml(b.name)}
+                </div>
+                ${idx < data.breadcrumbs.length - 1 ? '<div class="separator"><i data-lucide="chevron-right" style="width: 12px; height: 12px;"></i></div>' : ''}
+            `).join('');
+            if (window.lucide) lucide.createIcons();
         }
+
+        if (data.images.length === 0 && (!data.folders || data.folders.length === 0)) {
+            dom.galleryGrid.innerHTML = '<p style="grid-column:1/-1;text-align:center;margin-top:2rem;opacity:0.7">暂无内容，去上传点什么吧</p>';
+        }
+
+        // Render Folders
+        if (data.folders && data.folders.length > 0) {
+            data.folders.forEach(f => {
+                const div = document.createElement('div');
+                div.className = 'folder-card';
+                div.onclick = () => window.openFolder(f.id);
+                div.innerHTML = `
+                    <div class="folder-icon"><i data-lucide="folder" style="width: 20px; height: 20px;"></i></div>
+                    <div class="folder-info">
+                        <div class="folder-name" title="${escapeHtml(f.name)}">${escapeHtml(f.name)}</div>
+                    </div>
+                `;
+                dom.galleryGrid.appendChild(div);
+            });
+        }
+
+        const pathStr = data.breadcrumbs ? data.breadcrumbs.map(b => b.name).filter(n => n !== '首页').join('/') : '';
+        const prefix = pathStr ? pathStr + '/' : '';
+        window.currentFolderPath = prefix; // Save globally for new uploads
+        
+        data.images.forEach(img => img._virtualName = prefix + img.original_name);
 
         loadedImages = data.images; // Cache for multi-select
 
@@ -282,6 +325,7 @@ async function loadImages(page) {
             const isSelected = selectedImages.has(img.id);
 
             const safeName = escapeHtml(img.original_name);
+            const safeVirtualName = escapeHtml(img._virtualName);
 
             div.innerHTML = `
             ${isSelectMode ? `<div class="img-select-check ${isSelected ? 'checked' : ''}" data-id="${img.id}"><i data-lucide="check"></i></div>` : ''}
@@ -301,7 +345,7 @@ async function loadImages(page) {
                         </div>
                     </div>
                     <div style="display:flex;gap:0.5rem;flex-shrink:0">
-                        <button class="overlay-btn" onclick="event.stopPropagation();copyImageLink('${img.filename}')" title="拷贝链接">
+                        <button class="overlay-btn" onclick="event.stopPropagation();copyImageLink('${img.filename}', '${safeVirtualName}')" title="拷贝链接">
                             <i data-lucide="link-2" style="width:16px;height:16px"></i>
                         </button>
                         <button class="overlay-btn overlay-btn-danger" onclick="event.stopPropagation();quickDelete(${img.id})" title="删除">
@@ -582,6 +626,20 @@ async function processQueue() {
     formData.append('quality', pending.quality);
     if (pending.passthrough) {
         formData.append('passthrough', 'true');
+    }
+    
+    // Add current folder_id so uploads go directly into current viewed folder
+    if (currentFolderId) {
+        formData.append('folder_id', currentFolderId);
+    }
+
+    // Add path if it's a folder upload
+    if (pending.file.webkitRelativePath) {
+        const parts = pending.file.webkitRelativePath.split('/');
+        if (parts.length > 1) {
+            parts.pop(); // remove filename
+            formData.append('path', parts.join('/'));
+        }
     }
 
     // Use XHR for progress events
@@ -1581,7 +1639,8 @@ function copySelectedLinks() {
     }
     const lines = [];
     selectedImages.forEach((info) => {
-        lines.push(`${info.original_name} ${window.location.origin}/i/${info.filename}`);
+        const title = info._virtualName || info.original_name;
+        lines.push(`![${title}](${window.location.origin}/i/${info.filename})`);
     });
     const text = lines.join('\n');
     navigator.clipboard.writeText(text).then(() => {
@@ -1631,9 +1690,10 @@ async function loadSidebarStorage() {
 }
 
 // --- Quick Gallery Actions ---
-function copyImageLink(filename) {
+function copyImageLink(filename, displayName = null) {
     const url = `${window.location.origin}/i/${filename}`;
-    navigator.clipboard.writeText(url).then(() => {
+    const text = displayName ? `![${displayName}](${url})` : url;
+    navigator.clipboard.writeText(text).then(() => {
         showToast('链接已复制');
     }).catch(() => {
         showToast('复制失败', 'error');

@@ -1,0 +1,20 @@
+﻿[2Kfastimg  | /usr/local/lib/python3.9/site-packages/flask_limiter/extension.py:336: UserWarning: Using the in-memory storage for tracking rate limits as no storage was explicitly specified. This is not recommended for production use. See: https://flask-limiter.readthedocs.io#configuring-a-storage-backend for documentation about configuring the storage backend.
+[2Kfastimg  |   warnings.warn(
+[2Kfastimg  | Checking database compatibility...
+[2Kfastimg  | Database tables checked.
+[2Kfastimg  | Database ready. All existing data preserved.
+[2Kfastimg  | [2026-03-24 10:02:19 +0000] [9] [INFO] Starting gunicorn 21.2.0
+[2Kfastimg  | [2026-03-24 10:02:19 +0000] [9] [INFO] Listening at: http://0.0.0.0:5000 (9)
+[2Kfastimg  | [2026-03-24 10:02:19 +0000] [9] [INFO] Using worker: sync
+[2Kfastimg  | [2026-03-24 10:02:19 +0000] [10] [INFO] Booting worker with pid: 10
+[2Kfastimg  | [2026-03-24 10:02:19 +0000] [11] [INFO] Booting worker with pid: 11
+[2Kfastimg  | [2026-03-24 10:02:19 +0000] [12] [INFO] Booting worker with pid: 12
+[2Kfastimg  | [2026-03-24 10:02:19 +0000] [13] [INFO] Booting worker with pid: 13
+[2Kfastimg  | /usr/local/lib/python3.9/site-packages/flask_limiter/extension.py:336: UserWarning: Using the in-memory storage for tracking rate limits as no storage was explicitly specified. This is not recommended for production use. See: https://flask-limiter.readthedocs.io#configuring-a-storage-backend for documentation about configuring the storage backend.
+[2Kfastimg  |   warnings.warn(
+[2Kfastimg  | /usr/local/lib/python3.9/site-packages/flask_limiter/extension.py:336: UserWarning: Using the in-memory storage for tracking rate limits as no storage was explicitly specified. This is not recommended for production use. See: https://flask-limiter.readthedocs.io#configuring-a-storage-backend for documentation about configuring the storage backend.
+[2Kfastimg  |   warnings.warn(
+[2Kfastimg  | /usr/local/lib/python3.9/site-packages/flask_limiter/extension.py:336: UserWarning: Using the in-memory storage for tracking rate limits as no storage was explicitly specified. This is not recommended for production use. See: https://flask-limiter.readthedocs.io#configuring-a-storage-backend for documentation about configuring the storage backend.
+[2Kfastimg  |   warnings.warn(
+[2Kfastimg  | /usr/local/lib/python3.9/site-packages/flask_limiter/extension.py:336: UserWarning: Using the in-memory storage for tracking rate limits as no storage was explicitly specified. This is not recommended for production use. See: https://flask-limiter.readthedocs.io#configuring-a-storage-backend for documentation about configuring the storage backend.
+[2Kfastimg  |   warnings.warn(

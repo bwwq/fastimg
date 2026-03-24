@@ -45,11 +45,32 @@ class User(UserMixin, db.Model):
             quota_mb = 500
         return quota_mb * 1024 * 1024
 
+class Folder(db.Model):
+    id = db.Column(db.Integer, primary_key=True)
+    name = db.Column(db.String(256), nullable=False)
+    parent_id = db.Column(db.Integer, db.ForeignKey('folder.id'), nullable=True) # Null = Root
+    user_id = db.Column(db.Integer, db.ForeignKey('user.id'), nullable=False)
+    created_at = db.Column(db.DateTime, default=lambda: datetime.now(timezone.utc))
+    
+    # 关系: 级联删除，删文件夹时删掉下面的子文件夹
+    subfolders = db.relationship('Folder', backref=db.backref('parent', remote_side=[id]), lazy='dynamic', cascade="all, delete-orphan")
+    images = db.relationship('Image', backref='folder', lazy='dynamic')
+
+    def to_dict(self):
+        return {
+            'id': self.id,
+            'name': self.name,
+            'parent_id': self.parent_id,
+            'user_id': self.user_id,
+            'created_at': self.created_at.isoformat() if self.created_at else None
+        }
+
 class Image(db.Model):
     id = db.Column(db.Integer, primary_key=True)
     filename = db.Column(db.String(128), unique=True, nullable=False) # 存储在磁盘上的唯一文件名
     original_name = db.Column(db.String(256), nullable=False)
     user_id = db.Column(db.Integer, db.ForeignKey('user.id'))
+    folder_id = db.Column(db.Integer, db.ForeignKey('folder.id'), nullable=True) # None = Root
     size = db.Column(db.Integer)  # Bytes
     width = db.Column(db.Integer)
     height = db.Column(db.Integer)
@@ -64,6 +85,7 @@ class Image(db.Model):
             'id': self.id,
             'filename': self.filename,
             'original_name': self.original_name,
+            'folder_id': self.folder_id,
             'size': self.size,
             'width': self.width,
             'height': self.height,

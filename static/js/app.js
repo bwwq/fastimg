@@ -19,17 +19,21 @@ const dom = {
     dashboard: document.getElementById('dashboardSection'),
     galleryGrid: document.getElementById('imageGrid'),
     toastContainer: document.getElementById('toastContainer'),
+    topBar: document.getElementById('topBar'),
+    contentScroll: document.getElementById('contentScroll'),
     // Views
     viewGallery: document.getElementById('viewGallery'),
-    viewUpload: document.getElementById('viewUpload')
+    viewUpload: document.getElementById('viewUpload'),
+    viewSettings: document.getElementById('viewSettings'),
+    viewAdmin: document.getElementById('viewAdmin')
 };
 
 // Init
 document.addEventListener('DOMContentLoaded', async () => {
-    initTheme();
     await fetchCsrfToken();
     checkAuth();
     setupEventListeners();
+    setupScrollListener();
 });
 
 // --- CSRF Token ---
@@ -57,30 +61,22 @@ window.fetch = function (url, options = {}) {
     return originalFetch(url, options);
 };
 
-// --- Theme Logic ---
-function initTheme() {
-    const saved = localStorage.getItem('theme') || 'slate';
-    setTheme(saved);
+// --- Sidebar Toggle ---
+function toggleSidebar() {
+    dom.sidebar.classList.toggle('collapsed');
 }
 
-function setTheme(theme) {
-    document.documentElement.setAttribute('data-theme', theme);
-    localStorage.setItem('theme', theme);
-
-    // Update active state in menu
-    document.querySelectorAll('.theme-option').forEach(el => {
-        el.classList.toggle('active', el.innerText.trim().toLowerCase() === theme);
+// --- Scroll Listener for Top Bar glassmorphism ---
+function setupScrollListener() {
+    const scrollEl = dom.contentScroll;
+    if (!scrollEl) return;
+    scrollEl.addEventListener('scroll', () => {
+        if (scrollEl.scrollTop > 20) {
+            dom.topBar.classList.add('scrolled');
+        } else {
+            dom.topBar.classList.remove('scrolled');
+        }
     });
-
-    // Hide menu after selection
-    document.getElementById('themeMenu').classList.add('hidden');
-
-    // Refresh icons just in case color changed
-    if (window.feather) feather.replace();
-}
-
-function toggleThemeMenu() {
-    document.getElementById('themeMenu').classList.toggle('hidden');
 }
 
 // --- Auth ---
@@ -108,28 +104,43 @@ function updateUI(isLoggedIn) {
         dom.sidebar.classList.remove('hidden');
         container.classList.add('has-sidebar');
 
+        // Show top bar controls
+        document.getElementById('sidebarToggle').style.display = '';
+        document.getElementById('searchWrapper').style.display = '';
+        document.getElementById('topBarRight').style.display = '';
+
         // Sidebar Info
         document.getElementById('sidebarUsername').innerText = currentUser.username;
         document.getElementById('sidebarRole').innerText = currentUser.role;
         document.getElementById('sidebarAvatar').innerText = currentUser.username[0].toUpperCase();
+        document.getElementById('topBarAvatar').innerText = currentUser.username[0].toUpperCase();
 
         // Admin Link
         if (currentUser.role === 'admin') {
             document.getElementById('adminLink').innerHTML = `
-                <div class="nav-item" onclick="showAdminModal()">
-                    <i data-feather="settings"></i> 系统设置
+                <div class="nav-item" data-view="admin" onclick="switchView('admin')">
+                    <i data-lucide="shield-check"></i>
+                    <span class="sidebar-label">系统管理</span>
                 </div>
             `;
         }
+
+        // Load sidebar storage stats
+        loadSidebarStorage();
 
     } else {
         dom.hero.classList.remove('hidden');
         dom.dashboard.classList.add('hidden');
         dom.sidebar.classList.add('hidden');
         container.classList.remove('has-sidebar');
+
+        // Hide top bar controls
+        document.getElementById('sidebarToggle').style.display = 'none';
+        document.getElementById('searchWrapper').style.display = 'none';
+        document.getElementById('topBarRight').style.display = 'none';
     }
 
-    if (window.feather) feather.replace();
+    refreshIcons();
 }
 
 async function login(e) {
@@ -176,14 +187,19 @@ function switchView(viewName, resetFilter = false) {
     // Hide all views
     dom.viewGallery.classList.add('hidden');
     dom.viewUpload.classList.add('hidden');
+    dom.viewSettings.classList.add('hidden');
+    if (dom.viewAdmin) dom.viewAdmin.classList.add('hidden');
 
-    // Update Nav Active State
+    // Update Nav Active State via data-view attribute
     document.querySelectorAll('.nav-item').forEach(el => el.classList.remove('active'));
+    const activeNav = document.querySelector(`.nav-item[data-view="${viewName}"]`);
+    if (activeNav) activeNav.classList.add('active');
+
+    // Scroll to top
+    if (dom.contentScroll) dom.contentScroll.scrollTop = 0;
 
     if (viewName === 'gallery') {
         dom.viewGallery.classList.remove('hidden');
-        document.querySelector('.nav-item:nth-child(1)').classList.add('active');
-
         if (resetFilter) {
             filterUserId = null;
             filterUsername = null;
@@ -192,8 +208,15 @@ function switchView(viewName, resetFilter = false) {
         loadImages(currentPage);
     } else if (viewName === 'upload') {
         dom.viewUpload.classList.remove('hidden');
-        document.querySelector('.nav-item:nth-child(2)').classList.add('active');
-        loadMaxQuality(); // Refresh quality limit when viewing upload
+        loadMaxQuality();
+    } else if (viewName === 'settings') {
+        dom.viewSettings.classList.remove('hidden');
+        loadSettingsData();
+    } else if (viewName === 'admin') {
+        if (dom.viewAdmin) {
+            dom.viewAdmin.classList.remove('hidden');
+            loadAdminView();
+        }
     }
 }
 
@@ -249,8 +272,7 @@ async function loadImages(page) {
 
         data.images.forEach((img, index) => {
             const div = document.createElement('div');
-            div.className = 'img-card fade-in';
-            div.style.animationDelay = `${index * 0.05}s`;
+            div.className = 'img-card';
             div.dataset.imgId = img.id;
 
             const sizeStr = img.size > 1024 * 1024
@@ -262,13 +284,30 @@ async function loadImages(page) {
             const safeName = escapeHtml(img.original_name);
 
             div.innerHTML = `
-            ${isSelectMode ? `<div class="img-select-check ${isSelected ? 'checked' : ''}" data-id="${img.id}"><i data-feather="check"></i></div>` : ''}
-            <img src="/i/${img.filename}" loading="lazy" alt="${safeName}">
+            ${isSelectMode ? `<div class="img-select-check ${isSelected ? 'checked' : ''}" data-id="${img.id}"><i data-lucide="check"></i></div>` : ''}
+            <img src="/i/${img.filename}" loading="lazy" decoding="async" alt="${safeName}" style="transform:translateZ(0)" onload="this.parentNode.classList.add('loaded')">
             <div class="img-overlay">
-                <div class="img-name">${safeName}</div>
-                <div class="img-meta">
-                    <span>${sizeStr}</span>
-                    <span>${img.width}×${img.height}</span>
+                <div class="overlay-top">
+                    <button class="overlay-btn" onclick="event.stopPropagation();showDetail(loadedImages.find(i=>i.id===${img.id}))" title="详情">
+                        <i data-lucide="more-horizontal" style="width:18px;height:18px"></i>
+                    </button>
+                </div>
+                <div class="overlay-bottom">
+                    <div style="min-width:0;flex:1">
+                        <div class="img-name">${safeName}</div>
+                        <div class="img-meta">
+                            <span>${sizeStr}</span>
+                            <span>${img.width}×${img.height}</span>
+                        </div>
+                    </div>
+                    <div style="display:flex;gap:0.5rem;flex-shrink:0">
+                        <button class="overlay-btn" onclick="event.stopPropagation();copyImageLink('${img.filename}')" title="拷贝链接">
+                            <i data-lucide="link-2" style="width:16px;height:16px"></i>
+                        </button>
+                        <button class="overlay-btn overlay-btn-danger" onclick="event.stopPropagation();quickDelete(${img.id})" title="删除">
+                            <i data-lucide="trash-2" style="width:16px;height:16px"></i>
+                        </button>
+                    </div>
                 </div>
             </div>
         `;
@@ -294,7 +333,7 @@ async function loadImages(page) {
         }
 
         // Refresh icons
-        if (window.feather) feather.replace();
+        refreshIcons();
     } catch (e) {
         if (timestamp !== lastLoadImagesTimestamp) return;
         dom.galleryGrid.style.opacity = '1';
@@ -317,9 +356,9 @@ function setViewMode(mode) {
 
     // Update grid class
     if (mode === 'list') {
-        dom.galleryGrid.classList.add('list-view');
+        dom.galleryGrid.classList.add('list-mode');
     } else {
-        dom.galleryGrid.classList.remove('list-view');
+        dom.galleryGrid.classList.remove('list-mode');
     }
 }
 
@@ -327,8 +366,8 @@ function prevPage() {
     if (currentPage > 1) loadImages(currentPage - 1);
 }
 function nextPage() {
-    // logic needed to check max page, or API handles it
-    loadImages(currentPage + 1);
+    const totalPages = parseInt(document.getElementById('pageIndicator')?.textContent?.split('/')[1]) || 1;
+    if (currentPage < totalPages) loadImages(currentPage + 1);
 }
 
 // --- Upload ---
@@ -646,7 +685,7 @@ function checkNext() {
                 `上传完成: ${doneCount} 成功${errorCount > 0 ? ', ' + errorCount + ' 失败' : ''}`;
             document.getElementById('batchModalCloseBtn').style.display = '';
 
-            if (window.feather) feather.replace();
+            refreshIcons();
         } else {
             if (doneCount > 0) {
                 showToast(`上传完成: ${doneCount} 成功${errorCount > 0 ? ', ' + errorCount + ' 失败' : ''}`);
@@ -682,8 +721,15 @@ function setupEventListeners() {
         };
     }
 
-    zone.onclick = () => input.click();
-    input.onchange = (e) => uploadFiles(e.target.files);
+    zone.onclick = (e) => {
+        // Don't trigger file picker if clicking on the button or input inside the zone
+        if (e.target.closest('button') || e.target.tagName === 'INPUT') return;
+        input.click();
+    };
+    input.onchange = (e) => {
+        uploadFiles(e.target.files);
+        e.target.value = ''; // Reset so same file can be re-selected
+    };
 
     // Folder input
     const folderInput = document.getElementById('folderInput');
@@ -780,7 +826,7 @@ const CONFIG_GROUPS = {
 
 async function showAdminModal() {
     await loadAdminConfig();
-    showModal('adminModal');
+    showModal('adminConfigModal');
 }
 
 async function loadAdminConfig() {
@@ -809,8 +855,7 @@ async function loadAdminConfig() {
                 else value = '';
             }
 
-            // Unit conversion
-            // Unit conversion: Backend stores MB, so we just format it, DO NOT Divide again
+            // Backend stores values in MB, just display as-is
             if (item.meta.unit === 'MB' && value !== '') {
                 value = parseFloat(value).toFixed(1);
             }
@@ -900,12 +945,13 @@ async function loadUsers() {
                 quotaDisplay = '默认';
             }
 
+            const safeUsername = escapeHtml(u.username);
             html += `
                 <div class="user-card">
-                    <div class="user-avatar">${u.username[0].toUpperCase()}</div>
+                    <div class="user-avatar">${safeUsername[0].toUpperCase()}</div>
                     <div class="user-card-info">
                         <div class="user-card-name">
-                            ${u.username}
+                            ${safeUsername}
                             <span class="badge ${roleClass}">${u.role}</span>
                             ${!u.is_active ? '<span class="badge badge-inactive">已禁用</span>' : ''}
                             ${isMe ? '<span style="font-size:0.75rem; color:var(--text-muted)">(你)</span>' : ''}
@@ -917,13 +963,13 @@ async function loadUsers() {
                     ${!isMe ? `
                     <div class="user-card-actions">
                         <button class="btn btn-secondary btn-sm" onclick="viewUserFiles(${u.id}, '${u.username}')" title="查看文件">
-                            <i data-feather="image"></i>
+                            <i data-lucide="image"></i>
                         </button>
                         <button class="btn btn-secondary btn-sm" onclick="changeUserPassword(${u.id})" title="修改密码">
-                            <i data-feather="key"></i>
+                            <i data-lucide="key"></i>
                         </button>
                         <button class="btn btn-secondary btn-sm" onclick="setUserQuota(${u.id}, ${u.quota_bytes || 'null'})" title="设置配额">
-                            <i data-feather="hard-drive"></i>
+                            <i data-lucide="hard-drive"></i>
                         </button>
                         <select onchange="updateUserRole(${u.id}, this.value)" style="padding:0.25rem; border-radius:var(--radius-sm); border:1px solid var(--border); background:var(--bg-secondary); color:var(--text-primary)">
                             <option value="user" ${u.role === 'user' ? 'selected' : ''}>用户</option>
@@ -933,7 +979,7 @@ async function loadUsers() {
                             ${u.is_active ? '禁用' : '启用'}
                         </button>
                         <button class="btn btn-danger btn-sm" onclick="deleteUser(${u.id}, '${u.username}')" style="padding:0.25rem 0.5rem; font-size:0.8rem">
-                            <i data-feather="trash-2"></i>
+                            <i data-lucide="trash-2"></i>
                         </button>
                     </div>
                     ` : ''}
@@ -942,7 +988,7 @@ async function loadUsers() {
         });
 
         container.innerHTML = html;
-        if (window.feather) feather.replace();
+        refreshIcons();
     } catch (e) {
         container.innerHTML = '<div style="text-align:center; color:var(--danger)">加载失败</div>';
     }
@@ -950,7 +996,6 @@ async function loadUsers() {
 
 // Admin Helpers
 function viewUserFiles(userId, username) {
-    closeModal('adminModal');
     filterUserId = userId;
     filterUsername = username;
     switchView('gallery');
@@ -995,7 +1040,7 @@ async function setUserQuota(userId, currentQuotaBytes) {
         });
         if (res.ok) {
             showToast('配额已更新');
-            loadUsers();
+            loadAdminView();
         } else {
             const d = await res.json();
             showToast(d.error || '失败', 'error');
@@ -1031,7 +1076,7 @@ async function toggleUserActive(userId, currentActive) {
         });
         if (res.ok) {
             showToast(currentActive ? '用户已禁用' : '用户已启用');
-            loadUsers();
+            loadAdminView();
         } else {
             showToast('操作失败', 'error');
         }
@@ -1047,7 +1092,7 @@ async function deleteUser(userId, username) {
         const res = await fetch(`/api/admin/users/${userId}`, { method: 'DELETE' });
         if (res.ok) {
             showToast('用户已删除');
-            loadUsers();
+            loadAdminView();
         } else {
             const data = await res.json();
             showToast(data.error || '删除失败', 'error');
@@ -1116,7 +1161,7 @@ async function loadInvites() {
 
                 html += `
                     <tr>
-                        <td style="font-family:monospace; font-size:1.1em">${c.code}</td>
+                        <td style="font-family:monospace; font-size:1.1em">${escapeHtml(c.code)}</td>
                         <td>
                             <div style="display:flex; align-items:center; gap:0.5rem">
                                 <span style="color:${statusColor}">${statusText}</span>
@@ -1182,11 +1227,7 @@ async function saveConfig() {
         let val = input.value;
         if (input.type === 'checkbox') val = input.checked ? 'true' : 'false';
 
-        // Convert MB back
-        if (CONFIG_META[name].unit === 'MB') {
-            val = Math.floor(parseFloat(val) * 1024 * 1024);
-        }
-
+        // Store MB values as-is (backend reads them as MB)
         data[name] = val;
     });
 
@@ -1226,9 +1267,8 @@ async function openRegisterModal() {
 }
 
 // --- User Settings ---
-async function openUserSettings() {
-    showModal('userModal');
-    loadUserStats();
+function openUserSettings() {
+    switchView('settings');
 }
 
 async function loadUserStats() {
@@ -1313,14 +1353,21 @@ function closeModal(id) {
     el.classList.add('hidden');
 }
 function copyLink(id) {
-    document.getElementById(id).select();
-    document.execCommand('copy');
-    showToast('复制成功');
+    const text = document.getElementById(id).value;
+    navigator.clipboard.writeText(text).then(() => {
+        showToast('复制成功');
+    }).catch(() => {
+        document.getElementById(id).select();
+        document.execCommand('copy');
+        showToast('复制成功');
+    });
 }
 function showToast(msg, type = 'success') {
     const el = document.createElement('div');
     el.className = `toast ${type}`;
-    el.innerHTML = `<span>${msg}</span>`;
+    const span = document.createElement('span');
+    span.textContent = msg;
+    el.appendChild(span);
     dom.toastContainer.appendChild(el);
     setTimeout(() => el.remove(), 3000);
 }
@@ -1413,6 +1460,120 @@ function clearSelection() {
     loadImages(currentPage);
 }
 
+// --- Drag-to-Select (Rubber Band) ---
+(function initDragSelect() {
+    let isDragging = false;
+    let startX = 0, startY = 0;
+    let lassoEl = null;
+    const DRAG_THRESHOLD = 8;
+    let dragStarted = false;
+
+    function setup() {
+        lassoEl = document.createElement('div');
+        lassoEl.id = 'dragSelectLasso';
+        lassoEl.style.cssText = 'position:fixed;border:2px solid rgba(59,130,246,0.7);background:rgba(59,130,246,0.1);border-radius:4px;pointer-events:none;z-index:9999;display:none;';
+        document.body.appendChild(lassoEl);
+
+        document.addEventListener('mousedown', onMouseDown);
+        document.addEventListener('mousemove', onMouseMove);
+        document.addEventListener('mouseup', onMouseUp);
+    }
+
+    function onMouseDown(e) {
+        const grid = document.getElementById('galleryGrid');
+        if (!grid || !grid.contains(e.target)) return;
+        if (e.target.closest('button, a, input, select, .img-select-check')) return;
+        if (e.button !== 0) return;
+
+        isDragging = true;
+        dragStarted = false;
+        startX = e.clientX;
+        startY = e.clientY;
+        e.preventDefault();
+    }
+
+    function onMouseMove(e) {
+        if (!isDragging) return;
+
+        const dx = e.clientX - startX;
+        const dy = e.clientY - startY;
+
+        if (!dragStarted) {
+            if (Math.abs(dx) > DRAG_THRESHOLD || Math.abs(dy) > DRAG_THRESHOLD) {
+                dragStarted = true;
+                lassoEl.style.display = 'block';
+            } else {
+                return;
+            }
+        }
+
+        e.preventDefault();
+
+        const x = Math.min(startX, e.clientX);
+        const y = Math.min(startY, e.clientY);
+        const w = Math.abs(dx);
+        const h = Math.abs(dy);
+
+        lassoEl.style.left = x + 'px';
+        lassoEl.style.top = y + 'px';
+        lassoEl.style.width = w + 'px';
+        lassoEl.style.height = h + 'px';
+
+        // Highlight intersecting cards
+        const cards = document.querySelectorAll('#galleryGrid .img-card');
+        cards.forEach(card => {
+            const rect = card.getBoundingClientRect();
+            const hit = !(rect.right < x || rect.left > x + w || rect.bottom < y || rect.top > y + h);
+            card.classList.toggle('lasso-hover', hit);
+        });
+    }
+
+    function onMouseUp(e) {
+        if (!isDragging) return;
+
+        if (dragStarted) {
+            lassoEl.style.display = 'none';
+
+            // Collect selected image IDs from lasso-hover cards
+            const hitCards = document.querySelectorAll('#galleryGrid .img-card.lasso-hover');
+            const newIds = [];
+            hitCards.forEach(card => {
+                card.classList.remove('lasso-hover');
+                const imgId = parseInt(card.dataset.imgId);
+                if (imgId && loadedImages) {
+                    const img = loadedImages.find(i => i.id === imgId);
+                    if (img && !selectedImages.has(img.id)) {
+                        selectedImages.set(img.id, { filename: img.filename, original_name: img.original_name });
+                        newIds.push(img.id);
+                    }
+                }
+            });
+
+            // Enter select mode if not already, then re-render
+            if (newIds.length > 0) {
+                if (!isSelectMode) {
+                    isSelectMode = true;
+                    const btn = document.getElementById('btnSelectMode');
+                    const bar = document.getElementById('selectActionBar');
+                    if (btn) btn.classList.add('active');
+                    if (bar) bar.classList.remove('hidden');
+                }
+                updateSelectUI();
+                loadImages(currentPage);
+            }
+        }
+
+        isDragging = false;
+        dragStarted = false;
+    }
+
+    if (document.readyState === 'loading') {
+        document.addEventListener('DOMContentLoaded', setup);
+    } else {
+        setup();
+    }
+})();
+
 function copySelectedLinks() {
     if (selectedImages.size === 0) {
         showToast('请先选择至少一张图片', 'error');
@@ -1436,3 +1597,357 @@ function copySelectedLinks() {
         showToast(`已复制 ${selectedImages.size} 张图片的链接`);
     });
 }
+
+// --- Icon Refresh (Lucide) ---
+function refreshIcons() {
+    if (window.lucide) lucide.createIcons();
+}
+
+// --- Sidebar Storage Stats ---
+async function loadSidebarStorage() {
+    try {
+        const res = await fetch('/api/auth/stats');
+        if (!res.ok) return;
+        const data = await res.json();
+
+        const usedMB = (data.used_bytes / 1024 / 1024).toFixed(1);
+        let quotaText = '500 MB';
+        let percent = 0;
+
+        if (data.quota_bytes === 0) {
+            quotaText = '无限';
+        } else if (data.quota_bytes) {
+            quotaText = `${(data.quota_bytes / 1024 / 1024).toFixed(0)} MB`;
+            percent = Math.min((data.used_bytes / data.quota_bytes) * 100, 100);
+        }
+
+        document.getElementById('sidebarStorageUsed').textContent = `${usedMB} MB 已用`;
+        document.getElementById('sidebarStorageTotal').textContent = quotaText;
+        document.getElementById('sidebarStorageBar').style.width = `${percent}%`;
+        document.getElementById('storageCard').style.display = '';
+    } catch (e) {
+        // Ignore
+    }
+}
+
+// --- Quick Gallery Actions ---
+function copyImageLink(filename) {
+    const url = `${window.location.origin}/i/${filename}`;
+    navigator.clipboard.writeText(url).then(() => {
+        showToast('链接已复制');
+    }).catch(() => {
+        showToast('复制失败', 'error');
+    });
+}
+
+async function quickDelete(imgId) {
+    if (!confirm('确定删除此图片?')) return;
+    const res = await fetch(`/api/images/${imgId}`, { method: 'DELETE' });
+    if (res.ok) {
+        showToast('已删除');
+        loadImages(currentPage);
+    } else {
+        showToast('删除失败', 'error');
+    }
+}
+
+// --- Settings Page Data ---
+async function loadSettingsData() {
+    if (!currentUser) return;
+
+    // Profile
+    const el = (id) => document.getElementById(id);
+    el('settingsUsername').textContent = currentUser.username;
+    el('settingsAvatar').textContent = currentUser.username[0].toUpperCase();
+    el('settingsRoleBadge').textContent = currentUser.role;
+    el('settingsRoleBadge').className = `badge ${currentUser.role === 'admin' ? 'badge-admin' : 'badge-user'}`;
+
+    // Storage
+    try {
+        const res = await fetch('/api/auth/stats');
+        if (!res.ok) return;
+        const data = await res.json();
+
+        const usedMB = (data.used_bytes / 1024 / 1024).toFixed(1);
+        let quotaText = '500 MB';
+        let percent = 0;
+
+        if (data.quota_bytes === 0) {
+            quotaText = '无限';
+        } else if (data.quota_bytes) {
+            quotaText = `${(data.quota_bytes / 1024 / 1024).toFixed(0)} MB`;
+            percent = Math.min((data.used_bytes / data.quota_bytes) * 100, 100);
+        }
+
+        el('settingsStorageUsed').textContent = `${usedMB} MB`;
+        el('settingsStorageQuota').textContent = quotaText;
+        el('settingsStorageBar').style.width = `${percent}%`;
+        el('settingsImageCount').textContent = data.image_count || 0;
+    } catch (e) {}
+}
+
+async function updatePasswordFromSettings() {
+    const oldPass = document.getElementById('settingsOldPass').value;
+    const newPass = document.getElementById('settingsNewPass').value;
+    if (!oldPass || !newPass) {
+        showToast('请填写当前密码和新密码', 'error');
+        return;
+    }
+    const res = await fetch('/api/auth/password', {
+        method: 'PUT',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ old_password: oldPass, new_password: newPass })
+    });
+    if (res.ok) {
+        showToast('密码已更新');
+        document.getElementById('settingsOldPass').value = '';
+        document.getElementById('settingsNewPass').value = '';
+    } else {
+        showToast((await res.json()).error || '更新失败', 'error');
+    }
+}
+
+async function loadAdminView() {
+    const tbody = document.getElementById('adminUsersTbody');
+    const statsContainer = document.getElementById('adminStatsCards');
+    if (tbody) tbody.innerHTML = '<tr><td colspan="5" style="text-align:center;padding:2rem">加载中...</td></tr>';
+
+    // Load invites section in parallel
+    loadInlineInvites();
+
+    try {
+        const res = await fetch('/api/admin/users');
+        if (!res.ok) throw new Error();
+        const users = await res.json();
+
+        // --- Stats Cards ---
+        const totalUsers = users.length;
+        let totalBytes = 0;
+        let totalImages = 0;
+        users.forEach(u => {
+            totalBytes += u.used_bytes || 0;
+            totalImages += u.image_count || 0;
+        });
+
+        const totalDisplay = totalBytes > 1024 * 1024 * 1024
+            ? (totalBytes / 1024 / 1024 / 1024).toFixed(1) + ' GB'
+            : (totalBytes / 1024 / 1024).toFixed(1) + ' MB';
+
+        if (statsContainer) {
+            statsContainer.innerHTML = `
+                <div class="card" style="padding:1.5rem;position:relative;overflow:hidden">
+                    <div style="position:absolute;top:0;right:0;width:80px;height:80px;background:rgba(59,130,246,0.05);border-radius:50%;filter:blur(20px)"></div>
+                    <div style="display:flex;justify-content:space-between;align-items:start;margin-bottom:1.5rem">
+                        <div style="width:40px;height:40px;border-radius:12px;background:black;border:1px solid var(--border);display:flex;align-items:center;justify-content:center">
+                            <i data-lucide="users" style="width:18px;height:18px;color:#60a5fa"></i>
+                        </div>
+                    </div>
+                    <h3 style="font-size:2rem;font-weight:700;letter-spacing:-0.04em;margin-bottom:0.25rem" class="tabular-nums">${totalUsers}</h3>
+                    <p style="font-size:0.7rem;color:var(--text-muted);font-weight:700;text-transform:uppercase;letter-spacing:0.1em;margin:0">注册用户</p>
+                </div>
+                <div class="card" style="padding:1.5rem;position:relative;overflow:hidden">
+                    <div style="position:absolute;top:0;right:0;width:80px;height:80px;background:rgba(168,85,247,0.05);border-radius:50%;filter:blur(20px)"></div>
+                    <div style="display:flex;justify-content:space-between;align-items:start;margin-bottom:1.5rem">
+                        <div style="width:40px;height:40px;border-radius:12px;background:black;border:1px solid var(--border);display:flex;align-items:center;justify-content:center">
+                            <i data-lucide="hard-drive" style="width:18px;height:18px;color:#c084fc"></i>
+                        </div>
+                    </div>
+                    <h3 style="font-size:2rem;font-weight:700;letter-spacing:-0.04em;margin-bottom:0.25rem" class="tabular-nums">${totalDisplay}</h3>
+                    <p style="font-size:0.7rem;color:var(--text-muted);font-weight:700;text-transform:uppercase;letter-spacing:0.1em;margin:0">总存储量</p>
+                </div>
+                <div class="card" style="padding:1.5rem;position:relative;overflow:hidden">
+                    <div style="position:absolute;top:0;right:0;width:80px;height:80px;background:rgba(52,211,153,0.05);border-radius:50%;filter:blur(20px)"></div>
+                    <div style="display:flex;justify-content:space-between;align-items:start;margin-bottom:1.5rem">
+                        <div style="width:40px;height:40px;border-radius:12px;background:black;border:1px solid var(--border);display:flex;align-items:center;justify-content:center">
+                            <i data-lucide="image" style="width:18px;height:18px;color:#34d399"></i>
+                        </div>
+                    </div>
+                    <h3 style="font-size:2rem;font-weight:700;letter-spacing:-0.04em;margin-bottom:0.25rem" class="tabular-nums">${totalImages}</h3>
+                    <p style="font-size:0.7rem;color:var(--text-muted);font-weight:700;text-transform:uppercase;letter-spacing:0.1em;margin:0">总图片数</p>
+                </div>
+            `;
+        }
+
+        // --- Users Table ---
+        if (tbody) {
+            if (users.length === 0) {
+                tbody.innerHTML = '<tr><td colspan="5" style="text-align:center;padding:2rem">暂无用户</td></tr>';
+            } else {
+                let html = '';
+                users.forEach(u => {
+                    const usedMB = (u.used_bytes / 1024 / 1024).toFixed(1);
+                    const isMe = currentUser && u.id === currentUser.id;
+                    const roleBadge = u.role === 'admin'
+                        ? '<span class="badge badge-admin">Admin</span>'
+                        : '<span class="badge badge-user">User</span>';
+
+                    html += `
+                        <tr style="cursor:pointer" class="fade-in" onclick="${!isMe ? `viewUserFiles(${u.id}, '${escapeHtml(u.username)}')` : ''}">
+                            <td style="padding:1rem 1.5rem">
+                                <div style="display:flex;align-items:center;gap:0.75rem">
+                                    <div class="user-avatar" style="width:36px;height:36px;font-size:0.8rem;flex-shrink:0">${u.username[0].toUpperCase()}</div>
+                                    <div>
+                                        <div style="font-weight:600;font-size:0.9rem;letter-spacing:-0.01em">${escapeHtml(u.username)} ${isMe ? '<span style="font-size:0.75rem;color:var(--text-muted)">(你)</span>' : ''}</div>
+                                        <div style="font-size:0.75rem;color:var(--text-muted)">${u.image_count} 张图片</div>
+                                    </div>
+                                </div>
+                            </td>
+                            <td style="padding:1rem 1.5rem">${roleBadge}</td>
+                            <td style="padding:1rem 1.5rem;font-weight:600;font-variant-numeric:tabular-nums">${usedMB} MB</td>
+                            <td style="padding:1rem 1.5rem;color:var(--text-muted);font-variant-numeric:tabular-nums">${new Date(u.created_at).toLocaleDateString()}</td>
+                            <td style="padding:1rem 1.5rem;text-align:right">
+                                ${!isMe ? `
+                                    <div style="display:flex;gap:0.25rem;justify-content:flex-end">
+                                        <button class="btn btn-secondary btn-sm" onclick="event.stopPropagation();viewUserFiles(${u.id}, '${escapeHtml(u.username)}')" title="查看文件">
+                                            <i data-lucide="image" style="width:14px;height:14px"></i>
+                                        </button>
+                                        <button class="btn btn-secondary btn-sm" onclick="event.stopPropagation();changeUserPassword(${u.id})" title="修改密码">
+                                            <i data-lucide="key" style="width:14px;height:14px"></i>
+                                        </button>
+                                        <button class="btn btn-secondary btn-sm" onclick="event.stopPropagation();setUserQuota(${u.id}, ${u.quota_bytes || 'null'})" title="设置配额">
+                                            <i data-lucide="hard-drive" style="width:14px;height:14px"></i>
+                                        </button>
+                                        <select onchange="event.stopPropagation();updateUserRole(${u.id}, this.value)" style="padding:0.25rem 0.5rem;border-radius:var(--radius-sm);border:1px solid var(--border);background:var(--bg-tertiary);color:var(--text-primary);font-size:0.8rem">
+                                            <option value="user" ${u.role === 'user' ? 'selected' : ''}>用户</option>
+                                            <option value="admin" ${u.role === 'admin' ? 'selected' : ''}>管理员</option>
+                                        </select>
+                                        <button class="btn btn-danger btn-sm" onclick="event.stopPropagation();deleteUser(${u.id}, '${escapeHtml(u.username)}')" style="padding:0.25rem 0.5rem">
+                                            <i data-lucide="trash-2" style="width:14px;height:14px"></i>
+                                        </button>
+                                    </div>
+                                ` : ''}
+                            </td>
+                        </tr>
+                    `;
+                });
+                tbody.innerHTML = html;
+            }
+        }
+
+        refreshIcons();
+    } catch (e) {
+        if (tbody) tbody.innerHTML = '<tr><td colspan="5" style="text-align:center;color:var(--danger)">加载失败</td></tr>';
+    }
+}
+
+
+function switchAdminSection(section) {
+    const inviteEl = document.getElementById('adminInlineInvite');
+    if (!inviteEl) return;
+
+    if (section === 'invite') {
+        inviteEl.classList.toggle('hidden');
+        if (!inviteEl.classList.contains('hidden')) {
+            loadInlineInvites();
+        }
+    }
+}
+
+async function loadInlineInvites() {
+    const container = document.getElementById('inlineInviteContent');
+    if (!container) return;
+    container.innerHTML = '<div style="text-align:center;padding:1rem;color:var(--text-muted)">加载中...</div>';
+
+    try {
+        const res = await fetch('/api/admin/invites');
+        if (!res.ok) throw new Error(`HTTP ${res.status}`);
+        const codes = await res.json();
+
+        let html = `
+            <div style="margin-bottom:1rem; display:flex; gap:1rem; align-items:flex-end; flex-wrap:wrap">
+                <div style="display:flex; flex-direction:column; gap:0.25rem">
+                    <label style="font-size:0.85rem; color:var(--text-secondary)">生成数量</label>
+                    <input type="number" id="inlineInviteCount" value="1" class="input-control" style="width:80px">
+                </div>
+                <div style="display:flex; flex-direction:column; gap:0.25rem">
+                    <label style="font-size:0.85rem; color:var(--text-secondary)">最大使用次数</label>
+                    <input type="number" id="inlineInviteLimit" value="1" class="input-control" style="width:80px">
+                </div>
+                <div style="display:flex; flex-direction:column; gap:0.25rem">
+                    <label style="font-size:0.85rem; color:var(--text-secondary)">有效期(天)</label>
+                    <input type="number" id="inlineInviteDays" value="7" class="input-control" style="width:80px">
+                </div>
+                <button class="btn btn-primary" type="button" onclick="generateInlineInvite()">生成</button>
+            </div>
+
+            <div style="max-height:300px; overflow-y:auto; border:1px solid var(--border); border-radius:var(--radius-sm)">
+            <table class="data-table">
+                <thead>
+                    <tr>
+                        <th>邀请码</th>
+                        <th>使用情况</th>
+                        <th>过期时间</th>
+                        <th>操作</th>
+                    </tr>
+                </thead>
+                <tbody>
+        `;
+
+        if (codes.length === 0) {
+            html += '<tr><td colspan="4" style="text-align:center; padding:2rem">暂无邀请码</td></tr>';
+        } else {
+            codes.forEach(c => {
+                const isExpired = c.expires_at && new Date(c.expires_at) < new Date();
+                const isValid = c.valid;
+                const statusColor = isValid ? 'var(--success)' : 'var(--text-muted)';
+                const statusText = isValid ? '有效' : (isExpired ? '已过期' : '已耗尽');
+
+                let dateStr = '-';
+                if (c.expires_at) {
+                    dateStr = new Date(c.expires_at).toLocaleDateString();
+                }
+
+                html += `
+                    <tr>
+                        <td style="font-family:monospace; font-size:1.1em">${escapeHtml(c.code)}</td>
+                        <td>
+                            <div style="display:flex; align-items:center; gap:0.5rem">
+                                <span style="color:${statusColor}">${statusText}</span>
+                                <span style="font-size:0.85em; opacity:0.7">(${c.current_uses}/${c.max_uses})</span>
+                            </div>
+                        </td>
+                        <td style="font-size:0.9em">${dateStr}</td>
+                        <td>
+                            <button class="btn btn-danger btn-sm" type="button" style="padding:0.25rem 0.5rem; font-size:0.8rem" onclick="deleteInlineInvite('${c.id}')">删除</button>
+                        </td>
+                    </tr>
+                `;
+            });
+        }
+
+        html += '</tbody></table></div>';
+        container.innerHTML = html;
+    } catch (e) {
+        console.error('loadInlineInvites error:', e);
+        container.innerHTML = '<div style="text-align:center;color:var(--danger);padding:1rem">加载失败，请重试</div>';
+    }
+}
+
+async function generateInlineInvite() {
+    const count = document.getElementById('inlineInviteCount')?.value || 1;
+    const limit = document.getElementById('inlineInviteLimit')?.value || 1;
+    const days = document.getElementById('inlineInviteDays')?.value || 7;
+
+    const res = await fetch('/api/admin/invites', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ count: parseInt(count), limit: parseInt(limit), days: parseInt(days) })
+    });
+    if (res.ok) {
+        showToast('邀请码已生成');
+        loadInlineInvites();
+    } else {
+        showToast('生成失败', 'error');
+    }
+}
+
+async function deleteInlineInvite(id) {
+    const res = await fetch(`/api/admin/invites?id=${id}`, {
+        method: 'DELETE'
+    });
+    if (res.ok) {
+        showToast('已删除');
+        loadInlineInvites();
+    }
+}
+

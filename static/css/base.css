@@ -1,5 +1,5 @@
 /* ========================================
-   BASE STYLES
+   BASE STYLES — Apple Dark
    ======================================== */
 
 @import url('https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap');
@@ -11,44 +11,58 @@
 }
 
 body {
-    font-family: 'Inter', -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
+    font-family: -apple-system, BlinkMacSystemFont, 'SF Pro Display', 'SF Pro Text', 'Inter', 'Helvetica Neue', sans-serif;
     background-color: var(--bg-primary);
     color: var(--text-primary);
     line-height: 1.6;
     min-height: 100vh;
-    transition: background-color 0.3s ease, color 0.3s ease;
     overflow-x: hidden;
+    -webkit-font-smoothing: antialiased;
+    -moz-osx-font-smoothing: grayscale;
 }
 
-h1,
-h2,
-h3,
-h4,
-h5,
-h6 {
+/* Selection */
+::selection {
+    background: rgba(59, 130, 246, 0.3);
+    color: white;
+}
+
+/* Scrollbar — Minimal Apple style */
+::-webkit-scrollbar {
+    width: 6px;
+    height: 6px;
+}
+
+::-webkit-scrollbar-track {
+    background: transparent;
+}
+
+::-webkit-scrollbar-thumb {
+    background: rgba(255, 255, 255, 0.1);
+    border-radius: 10px;
+}
+
+::-webkit-scrollbar-thumb:hover {
+    background: rgba(255, 255, 255, 0.2);
+}
+
+/* Typography */
+h1, h2, h3, h4, h5, h6 {
     color: var(--text-primary);
     line-height: 1.2;
     margin-bottom: 0.5em;
-    font-weight: 600;
+    font-weight: 700;
+    letter-spacing: -0.03em;
 }
 
-h1 {
-    font-size: 2.5rem;
-    letter-spacing: -0.02em;
-}
-
-h2 {
-    font-size: 2rem;
-    letter-spacing: -0.01em;
-}
-
-h3 {
-    font-size: 1.5rem;
-}
+h1 { font-size: 2.5rem; }
+h2 { font-size: 2rem; }
+h3 { font-size: 1.5rem; }
 
 p {
     margin-bottom: 1em;
     color: var(--text-secondary);
+    font-weight: 500;
 }
 
 a {
@@ -61,35 +75,31 @@ a:hover {
     color: var(--accent-hover);
 }
 
-/* Scrollbar */
-::-webkit-scrollbar {
-    width: 8px;
-    height: 8px;
-}
-
-::-webkit-scrollbar-track {
-    background: transparent;
-}
-
-::-webkit-scrollbar-thumb {
-    background: var(--bg-tertiary);
-    border-radius: 4px;
-}
-
-::-webkit-scrollbar-thumb:hover {
-    background: var(--text-muted);
-}
-
 /* Animations */
 @keyframes fadeIn {
-    from {
-        opacity: 0;
-        transform: translateY(10px);
-    }
+    from { opacity: 0; transform: translateY(10px); }
+    to { opacity: 1; transform: translateY(0); }
+}
 
-    to {
-        opacity: 1;
-        transform: translateY(0);
+@keyframes fadeInUp {
+    from { opacity: 0; transform: translateY(20px); }
+    to { opacity: 1; transform: translateY(0); }
+}
+
+@keyframes slideInFromLeft {
+    from { opacity: 0; transform: translateX(-12px); }
+    to { opacity: 1; transform: translateX(0); }
+}
+
+@keyframes pulse-glow {
+    0%, 100% { opacity: 0.5; }
+    50% { opacity: 1; }
+}
+
+@keyframes ping {
+    75%, 100% {
+        transform: scale(2);
+        opacity: 0;
     }
 }
 
@@ -99,4 +109,9 @@ a:hover {
 
 .hidden {
     display: none !important;
+}
+
+/* Tabular numbers for data */
+.tabular-nums {
+    font-variant-numeric: tabular-nums;
 }

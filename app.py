@@ -28,9 +28,6 @@ def create_app(config_class=Config):
     def handle_csrf_error(e):
         return jsonify({'error': 'CSRF token missing or incorrect'}), 400
 
-    @login_manager.user_loader
-    def load_user(user_id):
-        return db.session.get(User, int(user_id))
 
     # Context Processor (inject config to templates if needed, or global vars)
     
@@ -70,7 +67,7 @@ def create_app(config_class=Config):
                  return jsonify({'error': 'Invalid invite code'}), 400
             
             # Check expiry explicitly
-            if invite.expires_at and datetime.datetime.utcnow() > invite.expires_at:
+            if invite.expires_at and datetime.datetime.now(datetime.timezone.utc) > invite.expires_at:
                 return jsonify({'error': 'Invite code expired'}), 400
 
             # Atomic increment
@@ -91,12 +88,12 @@ def create_app(config_class=Config):
         user = User(username=data['username'])
         user.set_password(data['password'])
         
-        # Check if first user -> admin
-        if User.query.count() == 0:
-            user.role = 'admin'
-            
         db.session.add(user)
         db.session.flush()
+        
+        # Check if first user -> admin (after flush, user is in DB)
+        if User.query.count() == 1:
+            user.role = 'admin'
         
         # Update invite last user
         if enable_invite and User.query.count() > 1 and invite:
@@ -117,7 +114,6 @@ def create_app(config_class=Config):
             return jsonify(user.to_dict())
         return jsonify({'error': 'Invalid credentials'}), 401
     
-    # ... (omit unchanged) ...
 
     @app.route('/api/auth/me')
     def me():
@@ -134,18 +130,11 @@ def create_app(config_class=Config):
         used_bytes = db.session.query(func.sum(Image.size)).filter_by(user_id=current_user.id).scalar() or 0
         count = Image.query.filter_by(user_id=current_user.id).count()
         
-        # User quota: individual > global (but Admin is unlimited)
-        if current_user.role == 'admin':
-            quota_bytes = 0 # Unlimited
-        elif current_user.quota_bytes is not None:
-            quota_bytes = current_user.quota_bytes
+        # User quota
+        if current_user.role != 'admin':
+            quota_bytes = current_user.get_quota_bytes()
         else:
-            quota_str = SystemConfig.get('user_quota')
-            try:
-                quota_mb = int(quota_str) if quota_str and quota_str != 'None' else 500
-            except (ValueError, TypeError):
-                quota_mb = 500
-            quota_bytes = quota_mb * 1024 * 1024
+            quota_bytes = 0  # Unlimited
             
         return jsonify({
             'used_bytes': used_bytes,
@@ -232,8 +221,8 @@ def create_app(config_class=Config):
             for img in user.images:
                 try:
                     os.remove(os.path.join(app.config['UPLOAD_FOLDER'], img.filename))
-                except:
-                    pass
+                except OSError as e:
+                    app.logger.warning(f"Failed to delete file {img.filename}: {e}")
                 db.session.delete(img)
             db.session.delete(user)
             db.session.commit()
@@ -300,7 +289,7 @@ def create_app(config_class=Config):
             days = int(req.get('days', 7)) # valid days
             limit = int(req.get('limit', 1)) # max uses
             
-            expires_at = datetime.datetime.utcnow() + datetime.timedelta(days=days)
+            expires_at = datetime.datetime.now(datetime.timezone.utc) + datetime.timedelta(days=days)
             
             created = []
             for _ in range(count):
@@ -310,7 +299,7 @@ def create_app(config_class=Config):
                     max_uses=limit,
                     current_uses=0,
                     expires_at=expires_at,
-                    created_at=datetime.datetime.utcnow()
+                    created_at=datetime.datetime.now(datetime.timezone.utc)
                 )
                 db.session.add(code)
                 created.append(code_str)
@@ -351,15 +340,7 @@ def create_app(config_class=Config):
             from sqlalchemy import func
             used_bytes = db.session.query(func.sum(Image.size)).filter_by(user_id=current_user.id).scalar() or 0
             
-            if current_user.quota_bytes is not None:
-                quota_bytes = current_user.quota_bytes
-            else:
-                quota_str = SystemConfig.get('user_quota')
-                try:
-                    quota_mb = int(quota_str) if quota_str and quota_str != 'None' else 500
-                except (ValueError, TypeError):
-                    quota_mb = 500
-                quota_bytes = quota_mb * 1024 * 1024
+            quota_bytes = current_user.get_quota_bytes()
             
             # 0 means unlimited
             if quota_bytes > 0 and used_bytes >= quota_bytes:
@@ -449,8 +430,8 @@ def create_app(config_class=Config):
             path = os.path.join(app.config['UPLOAD_FOLDER'], image.filename)
             if os.path.exists(path):
                 os.remove(path)
-        except:
-            pass # Continue to delete DB record
+        except OSError as e:
+            app.logger.warning(f"Failed to delete file {image.filename}: {e}")
             
         db.session.delete(image)
         db.session.commit()
@@ -463,12 +444,10 @@ def create_app(config_class=Config):
             img = Image.query.filter_by(filename=filename).first()
             if img and img.stats:
                 img.stats.view_count += 1
-                img.stats.last_view = datetime.datetime.utcnow()
-                # Commit every 10 views to reduce DB pressure
-                if img.stats.view_count % 10 == 0:
-                    db.session.commit()
-        except:
-            pass
+                img.stats.last_view = datetime.datetime.now(datetime.timezone.utc)
+                db.session.commit()
+        except Exception as e:
+            app.logger.debug(f"Failed to update view count: {e}")
         return send_from_directory(app.config['UPLOAD_FOLDER'], filename)
 
     @app.route('/api/admin/config', methods=['GET', 'POST'])
@@ -492,7 +471,76 @@ def create_app(config_class=Config):
 # Expose app for WSGI servers (Gunicorn)
 app = create_app()
 
+def ensure_db_compatible(app):
+    """确保旧数据库兼容新 schema，自动添加缺失列。"""
+    import sqlite3
+    db_path = app.config.get('SQLALCHEMY_DATABASE_URI', '')
+    if not db_path.startswith('sqlite:///'):
+        return  # Only handle SQLite
+
+    db_file = db_path.replace('sqlite:///', '')
+    if not os.path.exists(db_file):
+        return  # New database, create_all will handle it
+
+    conn = sqlite3.connect(db_file)
+    cursor = conn.cursor()
+
+    def has_column(table, column):
+        cursor.execute(f"PRAGMA table_info({table})")
+        cols = [row[1] for row in cursor.fetchall()]
+        return column in cols
+
+    def has_table(table):
+        cursor.execute("SELECT name FROM sqlite_master WHERE type='table' AND name=?", (table,))
+        return cursor.fetchone() is not None
+
+    try:
+        # --- User table ---
+        if has_table('user'):
+            if not has_column('user', 'is_active_user'):
+                cursor.execute("ALTER TABLE user ADD COLUMN is_active_user BOOLEAN DEFAULT 1")
+                app.logger.info("DB compat: added user.is_active_user")
+            if not has_column('user', 'quota_bytes'):
+                cursor.execute("ALTER TABLE user ADD COLUMN quota_bytes BIGINT")
+                app.logger.info("DB compat: added user.quota_bytes")
+
+        # --- InviteCode table ---
+        if has_table('invite_code'):
+            if not has_column('invite_code', 'max_uses'):
+                cursor.execute("ALTER TABLE invite_code ADD COLUMN max_uses INTEGER DEFAULT 1")
+                app.logger.info("DB compat: added invite_code.max_uses")
+            if not has_column('invite_code', 'current_uses'):
+                cursor.execute("ALTER TABLE invite_code ADD COLUMN current_uses INTEGER DEFAULT 0")
+                app.logger.info("DB compat: added invite_code.current_uses")
+                # Migrate old is_used column data
+                if has_column('invite_code', 'is_used'):
+                    cursor.execute("UPDATE invite_code SET current_uses = 1 WHERE is_used = 1")
+                    app.logger.info("DB compat: migrated is_used -> current_uses")
+            if not has_column('invite_code', 'expires_at'):
+                cursor.execute("ALTER TABLE invite_code ADD COLUMN expires_at DATETIME")
+                app.logger.info("DB compat: added invite_code.expires_at")
+            if not has_column('invite_code', 'created_at'):
+                cursor.execute("ALTER TABLE invite_code ADD COLUMN created_at DATETIME")
+                app.logger.info("DB compat: added invite_code.created_at")
+            if not has_column('invite_code', 'used_by_id'):
+                cursor.execute("ALTER TABLE invite_code ADD COLUMN used_by_id INTEGER REFERENCES user(id)")
+                app.logger.info("DB compat: added invite_code.used_by_id")
+
+        # --- ImageStat table ---
+        if has_table('image_stat'):
+            if not has_column('image_stat', 'last_referer'):
+                cursor.execute("ALTER TABLE image_stat ADD COLUMN last_referer VARCHAR(256)")
+                app.logger.info("DB compat: added image_stat.last_referer")
+
+        conn.commit()
+    except Exception as e:
+        app.logger.error(f"DB compat error: {e}")
+        conn.rollback()
+    finally:
+        conn.close()
+
 if __name__ == '__main__':
     with app.app_context():
+        ensure_db_compatible(app)
         db.create_all()
     app.run(debug=True, port=5000)

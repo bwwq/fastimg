@@ -1,6 +1,5 @@
 import os
 import uuid
-import imghdr
 from PIL import Image, ImageDraw, ImageFont, ImageOps
 # Prevent DecompressionBombError for large images, but set a reasonable limit (e.g. 100M pixels)
 Image.MAX_IMAGE_PIXELS = 100_000_000
@@ -95,7 +94,7 @@ def process_and_save_image(file_storage, user_id, user_quality=None, passthrough
     # 允许的情况：扩展名在白名单，或者（如果扩展名未知/不匹配）Magic头部在白名单
     # 优先信任 Magic Bytes
     if fmt not in allowed_exts and ext not in allowed_exts:
-         print(f"DEBUG: Upload Rejected. Ext: {ext}, Fmt: {fmt}, Allowed: {allowed_exts}") # Simple logging
+         current_app.logger.warning(f"Upload rejected. Ext: {ext}, Fmt: {fmt}, Allowed: {allowed_exts}")
          raise ValueError(f"File type not allowed: {ext or fmt}")
     
     # Ensure correct extension for saving if we're going to rename anyway

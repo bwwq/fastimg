@@ -1,4 +1,4 @@
-from datetime import datetime
+from datetime import datetime, timezone
 from werkzeug.security import generate_password_hash, check_password_hash
 from extensions import db
 from flask_login import UserMixin
@@ -8,7 +8,7 @@ class User(UserMixin, db.Model):
     username = db.Column(db.String(64), unique=True, index=True, nullable=False)
     password_hash = db.Column(db.String(256))
     role = db.Column(db.String(20), default='user')  # 'user' or 'admin'
-    created_at = db.Column(db.DateTime, default=datetime.utcnow)
+    created_at = db.Column(db.DateTime, default=lambda: datetime.now(timezone.utc))
     is_active_user = db.Column(db.Boolean, default=True)
     quota_bytes = db.Column(db.BigInteger, nullable=True)  # null = use global default
     
@@ -31,6 +31,20 @@ class User(UserMixin, db.Model):
             'quota_bytes': self.quota_bytes  # null means use global
         }
 
+    def get_quota_bytes(self):
+        """获取用户的有效配额（字节）。0 = 无限制。"""
+        if self.role == 'admin':
+            return 0
+        if self.quota_bytes is not None:
+            return self.quota_bytes
+        from models import SystemConfig
+        quota_str = SystemConfig.get('user_quota')
+        try:
+            quota_mb = int(quota_str) if quota_str and quota_str != 'None' else 500
+        except (ValueError, TypeError):
+            quota_mb = 500
+        return quota_mb * 1024 * 1024
+
 class Image(db.Model):
     id = db.Column(db.Integer, primary_key=True)
     filename = db.Column(db.String(128), unique=True, nullable=False) # 存储在磁盘上的唯一文件名
@@ -40,7 +54,7 @@ class Image(db.Model):
     width = db.Column(db.Integer)
     height = db.Column(db.Integer)
     mime_type = db.Column(db.String(64))
-    upload_time = db.Column(db.DateTime, default=datetime.utcnow)
+    upload_time = db.Column(db.DateTime, default=lambda: datetime.now(timezone.utc))
     
     # 统计信息关联
     stats = db.relationship('ImageStat', backref='image', uselist=False, cascade="all, delete-orphan")
@@ -105,7 +119,7 @@ class InviteCode(db.Model):
     current_uses = db.Column(db.Integer, default=0)
     expires_at = db.Column(db.DateTime, nullable=True)
     
-    created_at = db.Column(db.DateTime, default=datetime.utcnow)
+    created_at = db.Column(db.DateTime, default=lambda: datetime.now(timezone.utc))
     used_by_id = db.Column(db.Integer, db.ForeignKey('user.id')) # Last user or one of them (simplification)
     
     # For multiple users usage tracking, ideally we need ManyToMany. 
@@ -117,8 +131,13 @@ class InviteCode(db.Model):
     def is_valid(self):
         if self.current_uses >= self.max_uses:
             return False
-        if self.expires_at and datetime.utcnow() > self.expires_at:
-            return False
+        if self.expires_at:
+            # SQLite stores naive datetimes, so compare with naive utcnow
+            from datetime import datetime as dt
+            now = dt.utcnow()
+            expires = self.expires_at.replace(tzinfo=None) if self.expires_at.tzinfo else self.expires_at
+            if now > expires:
+                return False
         return True
 
     def to_dict(self):

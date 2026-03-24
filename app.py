@@ -166,7 +166,7 @@ def create_app(config_class=Config):
         data = request.get_json()
         user = User.query.filter_by(username=data.get('username')).first()
         if user and user.check_password(data.get('password')):
-            if not user.is_active_user:
+            if user.is_active_user is False:
                  return jsonify({'error': 'Account disabled'}), 403
             login_user(user)
             return jsonify(user.to_dict())

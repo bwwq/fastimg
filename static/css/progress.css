@@ -1,17 +1,22 @@
-/* Progress Bar (Upload) */
+/* ========================================
+   PROGRESS BAR — Gradient Glow
+   ======================================== */
+
 .progress-bar-bg {
-    background-color: var(--bg-tertiary);
-    border-radius: 999px;
     height: 6px;
     width: 100%;
-    margin-top: 0.5rem;
+    background: rgba(0, 0, 0, 0.5);
+    border-radius: var(--radius-full);
     overflow: hidden;
+    border: 1px solid rgba(255, 255, 255, 0.05);
+    backdrop-filter: blur(var(--blur-sm));
 }
 
 .progress-bar-fill {
     height: 100%;
     width: 0%;
-    background-color: var(--accent);
-    transition: width 0.2s ease;
-    border-radius: 999px;
+    background: linear-gradient(to right, #3b82f6, #22d3ee);
+    border-radius: var(--radius-full);
+    transition: width 0.3s ease;
+    box-shadow: 0 0 10px rgba(59, 130, 246, 0.5);
 }

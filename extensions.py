@@ -17,4 +17,5 @@ def load_user(user_id):
     from models import User
     return User.query.get(int(user_id))
 
-login_manager.login_view = 'api_login'  # 前后端分离其实不需要这个，但为了完整性先留着
+# 前后端分离不使用 login_view 重定向
+login_manager.login_view = None

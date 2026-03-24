@@ -11,6 +11,60 @@ from utils import process_and_save_image
 
 csrf = CSRFProtect()
 
+def _ensure_db_compatible(app):
+    """确保旧数据库兼容新 schema，只 ADD 列不删除任何数据。"""
+    import sqlite3
+    db_path = app.config.get('SQLALCHEMY_DATABASE_URI', '')
+    if not db_path.startswith('sqlite:///'):
+        return
+
+    db_file = db_path.replace('sqlite:///', '')
+    if not os.path.exists(db_file):
+        return
+
+    conn = sqlite3.connect(db_file)
+    cursor = conn.cursor()
+
+    def has_column(table, column):
+        cursor.execute(f"PRAGMA table_info({table})")
+        return column in [row[1] for row in cursor.fetchall()]
+
+    def has_table(table):
+        cursor.execute("SELECT name FROM sqlite_master WHERE type='table' AND name=?", (table,))
+        return cursor.fetchone() is not None
+
+    try:
+        if has_table('user'):
+            if not has_column('user', 'is_active_user'):
+                cursor.execute("ALTER TABLE user ADD COLUMN is_active_user BOOLEAN DEFAULT 1")
+            if not has_column('user', 'quota_bytes'):
+                cursor.execute("ALTER TABLE user ADD COLUMN quota_bytes BIGINT")
+
+        if has_table('invite_code'):
+            if not has_column('invite_code', 'max_uses'):
+                cursor.execute("ALTER TABLE invite_code ADD COLUMN max_uses INTEGER DEFAULT 1")
+            if not has_column('invite_code', 'current_uses'):
+                cursor.execute("ALTER TABLE invite_code ADD COLUMN current_uses INTEGER DEFAULT 0")
+                if has_column('invite_code', 'is_used'):
+                    cursor.execute("UPDATE invite_code SET current_uses = 1 WHERE is_used = 1")
+            if not has_column('invite_code', 'expires_at'):
+                cursor.execute("ALTER TABLE invite_code ADD COLUMN expires_at DATETIME")
+            if not has_column('invite_code', 'created_at'):
+                cursor.execute("ALTER TABLE invite_code ADD COLUMN created_at DATETIME")
+            if not has_column('invite_code', 'used_by_id'):
+                cursor.execute("ALTER TABLE invite_code ADD COLUMN used_by_id INTEGER REFERENCES user(id)")
+
+        if has_table('image_stat'):
+            if not has_column('image_stat', 'last_referer'):
+                cursor.execute("ALTER TABLE image_stat ADD COLUMN last_referer VARCHAR(256)")
+
+        conn.commit()
+    except Exception as e:
+        app.logger.warning(f"DB compat check: {e}")
+        conn.rollback()
+    finally:
+        conn.close()
+
 def create_app(config_class=Config):
     app = Flask(__name__)
     app.config.from_object(config_class)
@@ -23,6 +77,10 @@ def create_app(config_class=Config):
     limiter.init_app(app)
     migrate.init_app(app, db)
     csrf.init_app(app)
+
+    # Ensure database compatibility with older versions (only ADD columns, never drop)
+    with app.app_context():
+        _ensure_db_compatible(app)
 
     @app.errorhandler(CSRFError)
     def handle_csrf_error(e):
@@ -471,76 +529,10 @@ def create_app(config_class=Config):
 # Expose app for WSGI servers (Gunicorn)
 app = create_app()
 
-def ensure_db_compatible(app):
-    """确保旧数据库兼容新 schema，自动添加缺失列。"""
-    import sqlite3
-    db_path = app.config.get('SQLALCHEMY_DATABASE_URI', '')
-    if not db_path.startswith('sqlite:///'):
-        return  # Only handle SQLite
-
-    db_file = db_path.replace('sqlite:///', '')
-    if not os.path.exists(db_file):
-        return  # New database, create_all will handle it
-
-    conn = sqlite3.connect(db_file)
-    cursor = conn.cursor()
-
-    def has_column(table, column):
-        cursor.execute(f"PRAGMA table_info({table})")
-        cols = [row[1] for row in cursor.fetchall()]
-        return column in cols
-
-    def has_table(table):
-        cursor.execute("SELECT name FROM sqlite_master WHERE type='table' AND name=?", (table,))
-        return cursor.fetchone() is not None
-
-    try:
-        # --- User table ---
-        if has_table('user'):
-            if not has_column('user', 'is_active_user'):
-                cursor.execute("ALTER TABLE user ADD COLUMN is_active_user BOOLEAN DEFAULT 1")
-                app.logger.info("DB compat: added user.is_active_user")
-            if not has_column('user', 'quota_bytes'):
-                cursor.execute("ALTER TABLE user ADD COLUMN quota_bytes BIGINT")
-                app.logger.info("DB compat: added user.quota_bytes")
-
-        # --- InviteCode table ---
-        if has_table('invite_code'):
-            if not has_column('invite_code', 'max_uses'):
-                cursor.execute("ALTER TABLE invite_code ADD COLUMN max_uses INTEGER DEFAULT 1")
-                app.logger.info("DB compat: added invite_code.max_uses")
-            if not has_column('invite_code', 'current_uses'):
-                cursor.execute("ALTER TABLE invite_code ADD COLUMN current_uses INTEGER DEFAULT 0")
-                app.logger.info("DB compat: added invite_code.current_uses")
-                # Migrate old is_used column data
-                if has_column('invite_code', 'is_used'):
-                    cursor.execute("UPDATE invite_code SET current_uses = 1 WHERE is_used = 1")
-                    app.logger.info("DB compat: migrated is_used -> current_uses")
-            if not has_column('invite_code', 'expires_at'):
-                cursor.execute("ALTER TABLE invite_code ADD COLUMN expires_at DATETIME")
-                app.logger.info("DB compat: added invite_code.expires_at")
-            if not has_column('invite_code', 'created_at'):
-                cursor.execute("ALTER TABLE invite_code ADD COLUMN created_at DATETIME")
-                app.logger.info("DB compat: added invite_code.created_at")
-            if not has_column('invite_code', 'used_by_id'):
-                cursor.execute("ALTER TABLE invite_code ADD COLUMN used_by_id INTEGER REFERENCES user(id)")
-                app.logger.info("DB compat: added invite_code.used_by_id")
-
-        # --- ImageStat table ---
-        if has_table('image_stat'):
-            if not has_column('image_stat', 'last_referer'):
-                cursor.execute("ALTER TABLE image_stat ADD COLUMN last_referer VARCHAR(256)")
-                app.logger.info("DB compat: added image_stat.last_referer")
-
-        conn.commit()
-    except Exception as e:
-        app.logger.error(f"DB compat error: {e}")
-        conn.rollback()
-    finally:
-        conn.close()
+# For external scripts (init_db.py)
+ensure_db_compatible = _ensure_db_compatible
 
 if __name__ == '__main__':
     with app.app_context():
-        ensure_db_compatible(app)
         db.create_all()
     app.run(debug=True, port=5000)

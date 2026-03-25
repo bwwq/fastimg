@@ -939,12 +939,17 @@ const CONFIG_META = {
     'WATERMARK_TEXT': { group: 'process', label: '水印文字', desc: '留空则不添加水印', type: 'text' },
     'WATERMARK_OPACITY': { group: 'process', label: '水印透明度', desc: '0 (透明) - 255 (不透明)', type: 'range', min: 0, max: 255 },
     'WATERMARK_SIZE': { group: 'process', label: '水印字体基准', desc: '基准像素值，会自动按比例缩放', type: 'number' },
+
+    // 访问限流
+    'rate_limit_global': { group: 'ratelimit', label: '全局每日请求上限', desc: '同一 IP 每天最大请求数，0 = 不限', type: 'number', unit: '' },
+    'rate_limit_per_image': { group: 'ratelimit', label: '单图片每日访问上限', desc: '单张图片每天最大被访问次数，0 = 不限', type: 'number', unit: '' },
 };
 
 const CONFIG_GROUPS = {
     'basic': '基础设置',
     'upload': '上传控制',
-    'process': '图片处理'
+    'process': '图片处理',
+    'ratelimit': '访问限流'
 };
 
 async function showAdminModal() {

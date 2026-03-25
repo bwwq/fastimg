@@ -23,7 +23,8 @@ class Config:
     DEFAULT_USER_QUOTA = 100 * 1024 * 1024  # 100MB
 
     # 限流配置 (Flask-Limiter)
-    RATELIMIT_DEFAULT = "200 per day"
+    # 全局默认限流 (兜底值)，运行时可通过管理面板 SystemConfig 调整
+    RATELIMIT_DEFAULT = "5000 per day"
     RATELIMIT_STORAGE_URL = "memory://"
     RATELIMIT_HEADERS_ENABLED = True
     

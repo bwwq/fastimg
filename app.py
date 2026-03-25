@@ -1,4 +1,5 @@
 import os
+from werkzeug.middleware.proxy_fix import ProxyFix
 import datetime
 import uuid
 from flask import Flask, request, jsonify, send_from_directory, render_template, abort
@@ -93,6 +94,10 @@ def create_app(config_class=Config):
     migrate.init_app(app, db)
     csrf.init_app(app)
 
+    # ProxyFix: 让 Flask 在反向代理后正确获取真实客户端 IP
+    # x_for=1 表示信任一层 X-Forwarded-For
+    app.wsgi_app = ProxyFix(app.wsgi_app, x_for=1, x_proto=1, x_host=1)
+
     # Ensure database compatibility with older versions (only ADD columns, never drop)
     with app.app_context():
         _ensure_db_compatible(app)
@@ -107,6 +112,7 @@ def create_app(config_class=Config):
     # ---------------- API Routes ----------------
 
     @app.route('/')
+    @limiter.exempt
     def index():
         return app.send_static_file('index.html')
 
@@ -387,6 +393,7 @@ def create_app(config_class=Config):
             return jsonify({'message': 'Deleted'})
 
     @app.route('/api/public/config')
+    @limiter.exempt
     def public_config():
         """Public endpoint for non-sensitive config like quality limit"""
         return jsonify({
@@ -547,11 +554,21 @@ def create_app(config_class=Config):
         return jsonify({'message': 'Deleted'})
 
     @app.route('/i/<path:filename>')
+    @limiter.exempt
     def serve_image(filename):
-        # Update view count with batched commit (every 10 views)
+        # 单图片每日访问上限检查
+        per_image_limit = SystemConfig.get('rate_limit_per_image', 0, type_func=int)
+
         try:
             img = Image.query.filter_by(filename=filename).first()
             if img and img.stats:
+                # 检查是否超过单图片每日限制
+                if per_image_limit > 0:
+                    today = datetime.datetime.now(datetime.timezone.utc).date()
+                    last_view_date = img.stats.last_view.date() if img.stats.last_view else None
+                    if last_view_date == today and img.stats.view_count >= per_image_limit:
+                        return jsonify({'error': '该图片今日访问次数已达上限'}), 429
+
                 img.stats.view_count += 1
                 img.stats.last_view = datetime.datetime.now(datetime.timezone.utc)
                 db.session.commit()

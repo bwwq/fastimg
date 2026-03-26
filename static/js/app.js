@@ -294,11 +294,34 @@ async function loadImages(page) {
             data.folders.forEach(f => {
                 const div = document.createElement('div');
                 div.className = 'folder-card';
-                div.onclick = () => window.openFolder(f.id);
+                div.onclick = (e) => {
+                    // Don't navigate if clicking on the menu area
+                    if (e.target.closest('.folder-menu-btn, .folder-menu')) return;
+                    window.openFolder(f.id);
+                };
+                const safeName = escapeHtml(f.name);
+                // JSON.stringify gives us a JS-safe string with double quotes,
+                // then escapeHtml turns " into &quot; so it's safe inside onclick="..."
+                const jsName = escapeHtml(JSON.stringify(f.name));
                 div.innerHTML = `
                     <div class="folder-icon"><i data-lucide="folder" style="width: 20px; height: 20px;"></i></div>
                     <div class="folder-info">
-                        <div class="folder-name" title="${escapeHtml(f.name)}">${escapeHtml(f.name)}</div>
+                        <div class="folder-name" title="${safeName}">${safeName}</div>
+                    </div>
+                    <div class="folder-menu-wrapper">
+                        <button class="folder-menu-btn" onclick="event.stopPropagation();toggleFolderMenu(this)" title="更多操作">
+                            <i data-lucide="more-vertical" style="width:16px;height:16px"></i>
+                        </button>
+                        <div class="folder-menu">
+                            <div class="folder-menu-item" onclick="event.stopPropagation();copyFolderLinks(${f.id}, ${jsName})">
+                                <i data-lucide="copy" style="width:14px;height:14px"></i>
+                                复制全部链接
+                            </div>
+                            <div class="folder-menu-item" onclick="event.stopPropagation();window.openFolder(${f.id})">
+                                <i data-lucide="folder-open" style="width:14px;height:14px"></i>
+                                打开文件夹
+                            </div>
+                        </div>
                     </div>
                 `;
                 dom.galleryGrid.appendChild(div);
@@ -889,6 +912,9 @@ function setupEventListeners() {
         }
         if (files.length > 0) uploadFiles(files);
     };
+
+    // --- Gallery Drop Zone (drag files onto gallery to upload into current folder) ---
+    setupGalleryDropZone();
 
     // Load max quality on init
     loadMaxQuality();
@@ -2081,3 +2107,274 @@ async function deleteInlineInvite(id) {
     }
 }
 
+// --- Gallery Drop Zone ---
+function setupGalleryDropZone() {
+    const galleryView = document.getElementById('viewGallery');
+    if (!galleryView) return;
+
+    // Create overlay element
+    const overlay = document.createElement('div');
+    overlay.id = 'galleryDropOverlay';
+    overlay.className = 'gallery-drop-overlay';
+    overlay.innerHTML = `
+        <div class="gallery-drop-content">
+            <i data-lucide="upload-cloud" style="width:48px;height:48px;stroke-width:1.5"></i>
+            <div class="gallery-drop-title">释放以上传到当前文件夹</div>
+            <div class="gallery-drop-hint">沿用上传页面的压缩配置</div>
+        </div>
+    `;
+    galleryView.style.position = 'relative';
+    galleryView.appendChild(overlay);
+
+    let dragCounter = 0;
+
+    galleryView.addEventListener('dragenter', (e) => {
+        e.preventDefault();
+        if (!e.dataTransfer.types.includes('Files')) return;
+        dragCounter++;
+        overlay.classList.add('active');
+        if (window.lucide) lucide.createIcons({ nodes: overlay.querySelectorAll('[data-lucide]') });
+    });
+
+    galleryView.addEventListener('dragover', (e) => {
+        e.preventDefault();
+        if (e.dataTransfer.types.includes('Files')) {
+            e.dataTransfer.dropEffect = 'copy';
+        }
+    });
+
+    galleryView.addEventListener('dragleave', (e) => {
+        e.preventDefault();
+        dragCounter--;
+        if (dragCounter <= 0) {
+            dragCounter = 0;
+            overlay.classList.remove('active');
+        }
+    });
+
+    galleryView.addEventListener('drop', async (e) => {
+        e.preventDefault();
+        dragCounter = 0;
+        overlay.classList.remove('active');
+
+        if (!currentUser) {
+            showToast('请先登录', 'error');
+            return;
+        }
+
+        let files = [];
+        const imageExts = ['jpg', 'jpeg', 'png', 'gif', 'webp'];
+
+        if (e.dataTransfer.items) {
+            const items = Array.from(e.dataTransfer.items);
+
+            const traverseFileTree = async (item, path) => {
+                if (item.isFile) {
+                    return new Promise((resolve) => {
+                        item.file((file) => {
+                            if (path) {
+                                Object.defineProperty(file, 'webkitRelativePath', {
+                                    value: path + file.name, writable: false
+                                });
+                            }
+                            const ext = file.name.split('.').pop().toLowerCase();
+                            if (imageExts.includes(ext)) files.push(file);
+                            resolve();
+                        });
+                    });
+                } else if (item.isDirectory) {
+                    const dirReader = item.createReader();
+                    return new Promise((resolve) => {
+                        dirReader.readEntries(async (entries) => {
+                            await Promise.all(entries.map(ent => traverseFileTree(ent, path + item.name + '/')));
+                            resolve();
+                        });
+                    });
+                }
+            };
+
+            await Promise.all(items.map(item => {
+                if (item.kind === 'file') {
+                    const entry = item.webkitGetAsEntry ? item.webkitGetAsEntry() : null;
+                    if (entry) return traverseFileTree(entry, '');
+                    const f = item.getAsFile();
+                    if (f) {
+                        const ext = f.name.split('.').pop().toLowerCase();
+                        if (imageExts.includes(ext)) files.push(f);
+                    }
+                }
+                return Promise.resolve();
+            }));
+        } else {
+            files = Array.from(e.dataTransfer.files).filter(f => {
+                const ext = f.name.split('.').pop().toLowerCase();
+                return imageExts.includes(ext);
+            });
+        }
+
+        if (files.length > 0) {
+            galleryUploadFiles(files);
+        } else {
+            showToast('未找到支持的图片文件', 'error');
+        }
+    });
+}
+
+/**
+ * Upload files using the upload page's saved settings (from localStorage).
+ * This allows gallery drag-drop to respect the user's quality/passthrough preferences.
+ */
+function galleryUploadFiles(files) {
+    if (!files || files.length === 0) return;
+
+    // Read settings from localStorage (same source as upload page)
+    const savedOriginal = localStorage.getItem('originalMode') === 'true';
+    const savedStrict = localStorage.getItem('strictMode') === 'true';
+    const savedQuality = parseInt(localStorage.getItem('uploadQuality') || '80');
+
+    const passthrough = savedStrict;
+    let quality = 80;
+    if (savedOriginal || savedStrict) {
+        quality = 100;
+    } else {
+        quality = Math.min(savedQuality, maxQualityLimit);
+    }
+
+    // Pre-filter oversized files
+    const validFiles = [];
+    for (const file of files) {
+        if (window.maxUploadSizeBytes && file.size > window.maxUploadSizeBytes) {
+            showToast(`文件 ${file.name} 超过大小限制 (${(window.maxUploadSizeBytes / 1024 / 1024).toFixed(0)}MB)`, 'error');
+            continue;
+        }
+        validFiles.push(file);
+    }
+    if (validFiles.length === 0) return;
+
+    // Use batch modal for 2+ files
+    const useBatchModal = validFiles.length >= 2;
+    if (useBatchModal) openBatchModal(validFiles.length);
+
+    const queueContainer = document.getElementById('uploadQueue');
+    const queueList = document.getElementById('queueList');
+    if (!useBatchModal) queueContainer.classList.remove('hidden');
+
+    for (const file of validFiles) {
+        const id = 'upload_' + Date.now() + '_' + Math.random().toString(36).substr(2, 5);
+        uploadQueue.push({ id, file, quality, passthrough, status: 'pending' });
+        const safeName = escapeHtml(file.name);
+
+        if (useBatchModal) {
+            const el = document.createElement('div');
+            el.id = id;
+            el.className = 'batch-file-item';
+            el.innerHTML = `
+                <div style="flex:1; min-width:0">
+                    <div style="display:flex; justify-content:space-between; margin-bottom:0.25rem">
+                        <div style="overflow:hidden; text-overflow:ellipsis; white-space:nowrap; max-width:70%">${safeName}</div>
+                        <div class="upload-status" style="font-size:0.85rem; color:var(--text-secondary)">等待中</div>
+                    </div>
+                    <div class="progress-bar-bg" style="height:4px; border-radius:2px">
+                        <div class="progress-bar-fill" style="width:0%"></div>
+                    </div>
+                </div>
+            `;
+            document.getElementById('batchFileList').appendChild(el);
+        } else {
+            const el = document.createElement('div');
+            el.id = id;
+            el.className = 'card';
+            el.style.cssText = 'padding: 0.75rem 1rem; display: flex; align-items: center; gap: 1rem';
+            el.innerHTML = `
+                <div style="flex:1; min-width:0">
+                    <div style="display:flex; justify-content:space-between; margin-bottom:0.25rem">
+                        <div style="overflow:hidden; text-overflow:ellipsis; white-space:nowrap; max-width:70%">${safeName}</div>
+                        <div class="upload-status" style="font-size:0.85rem; color:var(--text-secondary)">等待中</div>
+                    </div>
+                    <div class="progress-bar-bg" style="height:4px; border-radius:2px">
+                        <div class="progress-bar-fill" style="width:0%"></div>
+                    </div>
+                </div>
+            `;
+            queueList.appendChild(el);
+        }
+    }
+
+    processQueue();
+}
+
+// --- Folder Context Menu ---
+function toggleFolderMenu(btn) {
+    const menu = btn.nextElementSibling;
+    const wasOpen = menu.classList.contains('open');
+    // Close all other menus first
+    closeFolderMenus();
+    if (!wasOpen) {
+        menu.classList.add('open');
+        if (window.lucide) lucide.createIcons({ nodes: menu.querySelectorAll('[data-lucide]') });
+    }
+}
+
+function closeFolderMenus() {
+    document.querySelectorAll('.folder-menu.open').forEach(m => m.classList.remove('open'));
+}
+
+// Close folder menus on any outside click
+document.addEventListener('click', (e) => {
+    if (!e.target.closest('.folder-menu-wrapper')) {
+        closeFolderMenus();
+    }
+});
+
+/**
+ * Copy all image links in a specific folder (across all pages).
+ * @param {number} folderId - The folder ID to copy links from
+ * @param {string} folderName - Display name of the folder
+ */
+async function copyFolderLinks(folderId, folderName) {
+    closeFolderMenus();
+
+    let allImages = [];
+    let page = 1;
+    let totalPages = 1;
+
+    showToast(`正在收集「${folderName}」的链接...`);
+
+    try {
+        while (page <= totalPages) {
+            let url = `/api/images?page=${page}&sort=name&order=asc&folder_id=${folderId}`;
+            if (filterUserId) url += `&user_id=${filterUserId}`;
+
+            const res = await fetch(url);
+            if (!res.ok) throw new Error('请求失败');
+            const data = await res.json();
+
+            totalPages = data.pages;
+
+            // Build path prefix from breadcrumbs
+            const pathStr = data.breadcrumbs
+                ? data.breadcrumbs.map(b => b.name).filter(n => n !== '首页').join('/')
+                : '';
+            const prefix = pathStr ? pathStr + '/' : '';
+
+            data.images.forEach(img => {
+                const displayName = prefix + img.original_name;
+                allImages.push(`![${displayName}](${window.location.origin}/i/${img.filename})`);
+            });
+
+            page++;
+        }
+
+        if (allImages.length === 0) {
+            showToast(`「${folderName}」中没有图片`, 'error');
+            return;
+        }
+
+        const text = allImages.join('\n');
+        await navigator.clipboard.writeText(text);
+        showToast(`已复制「${folderName}」中 ${allImages.length} 张图片的 Markdown 链接`);
+    } catch (e) {
+        console.error('copyFolderLinks error:', e);
+        showToast('复制失败', 'error');
+    }
+}

@@ -295,35 +295,44 @@ async function loadImages(page) {
                 const div = document.createElement('div');
                 div.className = 'folder-card';
                 div.onclick = (e) => {
-                    // Don't navigate if clicking on the menu area
                     if (e.target.closest('.folder-menu-btn, .folder-menu')) return;
                     window.openFolder(f.id);
                 };
                 const safeName = escapeHtml(f.name);
-                // JSON.stringify gives us a JS-safe string with double quotes,
-                // then escapeHtml turns " into &quot; so it's safe inside onclick="..."
-                const jsName = escapeHtml(JSON.stringify(f.name));
                 div.innerHTML = `
                     <div class="folder-icon"><i data-lucide="folder" style="width: 20px; height: 20px;"></i></div>
                     <div class="folder-info">
                         <div class="folder-name" title="${safeName}">${safeName}</div>
                     </div>
                     <div class="folder-menu-wrapper">
-                        <button class="folder-menu-btn" onclick="event.stopPropagation();toggleFolderMenu(this)" title="更多操作">
+                        <button class="folder-menu-btn" title="更多操作">
                             <i data-lucide="more-vertical" style="width:16px;height:16px"></i>
                         </button>
                         <div class="folder-menu">
-                            <div class="folder-menu-item" onclick="event.stopPropagation();copyFolderLinks(${f.id}, ${jsName})">
+                            <div class="folder-menu-item" data-action="copy">
                                 <i data-lucide="copy" style="width:14px;height:14px"></i>
                                 复制全部链接
                             </div>
-                            <div class="folder-menu-item" onclick="event.stopPropagation();window.openFolder(${f.id})">
+                            <div class="folder-menu-item" data-action="open">
                                 <i data-lucide="folder-open" style="width:14px;height:14px"></i>
                                 打开文件夹
                             </div>
                         </div>
                     </div>
                 `;
+                // Attach events programmatically (no escaping issues)
+                div.querySelector('.folder-menu-btn').addEventListener('click', (e) => {
+                    e.stopPropagation();
+                    toggleFolderMenu(e.currentTarget);
+                });
+                div.querySelector('[data-action="copy"]').addEventListener('click', (e) => {
+                    e.stopPropagation();
+                    copyFolderLinks(f.id, f.name);
+                });
+                div.querySelector('[data-action="open"]').addEventListener('click', (e) => {
+                    e.stopPropagation();
+                    window.openFolder(f.id);
+                });
                 dom.galleryGrid.appendChild(div);
             });
         }

@@ -104,6 +104,10 @@ def _ensure_db_compatible(app):
                 cursor.execute("ALTER TABLE backup_run ADD COLUMN bytes_total BIGINT")
             if not has_column('backup_run', 'progress_updated_at'):
                 cursor.execute("ALTER TABLE backup_run ADD COLUMN progress_updated_at DATETIME")
+            cursor.execute(
+                "DELETE FROM backup_run WHERE error = ?",
+                ('Interrupted by database snapshot restore',)
+            )
 
         conn.commit()
     except Exception as e:

@@ -607,10 +607,36 @@ def sanitize_snapshot_db(snapshot_db):
         cur.execute("SELECT name FROM sqlite_master WHERE type='table' AND name='backup_run'")
         if cur.fetchone():
             cur.execute("""
-                UPDATE backup_run
-                SET status = 'failed', error = 'Interrupted by database snapshot restore'
+                DELETE FROM backup_run
                 WHERE status IN ('queued', 'running')
+                   OR error = 'Interrupted by database snapshot restore'
             """)
+        conn.commit()
+    finally:
+        conn.close()
+
+
+def ensure_backup_run_progress_columns(db_path):
+    conn = sqlite3.connect(db_path)
+    try:
+        cur = conn.cursor()
+        cur.execute("SELECT name FROM sqlite_master WHERE type='table' AND name='backup_run'")
+        if not cur.fetchone():
+            return
+
+        cur.execute("PRAGMA table_info(backup_run)")
+        columns = {row[1] for row in cur.fetchall()}
+        additions = {
+            "progress_stage": "ALTER TABLE backup_run ADD COLUMN progress_stage VARCHAR(64) DEFAULT 'queued'",
+            "progress_percent": "ALTER TABLE backup_run ADD COLUMN progress_percent INTEGER DEFAULT 0",
+            "progress_message": "ALTER TABLE backup_run ADD COLUMN progress_message VARCHAR(256)",
+            "bytes_done": "ALTER TABLE backup_run ADD COLUMN bytes_done BIGINT",
+            "bytes_total": "ALTER TABLE backup_run ADD COLUMN bytes_total BIGINT",
+            "progress_updated_at": "ALTER TABLE backup_run ADD COLUMN progress_updated_at DATETIME",
+        }
+        for column, statement in additions.items():
+            if column not in columns:
+                cur.execute(statement)
         conn.commit()
     finally:
         conn.close()
@@ -960,9 +986,86 @@ def start_restore_async(app, backup_name, password):
     return run
 
 
+def record_restore_result(app, backup_name, remote_path, status, message, error=None, started_at=None):
+    db.session.remove()
+    db.engine.dispose()
+    db.create_all()
+    ensure_backup_run_progress_columns(db_file_from_uri(app.config["SQLALCHEMY_DATABASE_URI"]))
+
+    run = BackupRun(
+        trigger="restore",
+        status=status,
+        backup_name=backup_name,
+        remote_path=remote_path,
+        progress_stage="done" if status == "success" else "failed",
+        progress_percent=100 if status == "success" else 0,
+        progress_message=message,
+        error=error,
+        log=message,
+        started_at=started_at or utcnow(),
+        finished_at=utcnow(),
+        progress_updated_at=utcnow(),
+    )
+    db.session.add(run)
+    db.session.commit()
+    return run
+
+
+def clear_directory_contents(path):
+    os.makedirs(path, exist_ok=True)
+    for entry in os.scandir(path):
+        if entry.is_dir(follow_symlinks=False):
+            shutil.rmtree(entry.path)
+        else:
+            os.unlink(entry.path)
+
+
+def copy_directory_contents(src, dest):
+    os.makedirs(dest, exist_ok=True)
+    if not os.path.isdir(src):
+        return
+    for name in os.listdir(src):
+        src_path = os.path.join(src, name)
+        dest_path = os.path.join(dest, name)
+        if os.path.isdir(src_path) and not os.path.islink(src_path):
+            shutil.copytree(src_path, dest_path)
+        else:
+            shutil.copy2(src_path, dest_path)
+
+
+def replace_directory_contents(src, dest):
+    clear_directory_contents(dest)
+    copy_directory_contents(src, dest)
+
+
+def database_image_filenames(db_path):
+    conn = sqlite3.connect(db_path)
+    try:
+        cur = conn.cursor()
+        cur.execute("SELECT name FROM sqlite_master WHERE type='table' AND name='image'")
+        if not cur.fetchone():
+            return []
+        cur.execute("SELECT filename FROM image")
+        return [row[0] for row in cur.fetchall()]
+    finally:
+        conn.close()
+
+
+def validate_uploads_available_for_db(db_path, uploads_dir):
+    missing = [
+        name for name in database_image_filenames(db_path)
+        if not os.path.isfile(os.path.join(uploads_dir, name))
+    ]
+    if missing:
+        raise BackupError("Restored uploads are missing files: " + ", ".join(missing[:10]))
+
+
 def execute_restore(app, run_id, backup_name, password):
     owner = f"restore:{run_id}"
     work_root = None
+    restored_db_applied = False
+    restore_started_at = utcnow()
+    restore_remote_path = None
     with app.app_context():
         run = db.session.get(BackupRun, run_id)
         try:
@@ -981,7 +1084,9 @@ def execute_restore(app, run_id, backup_name, password):
             run.status = "running"
             run.backup_name = backup_name
             run.remote_path = remote_join(cfg.remote_path, backup_name)
+            restore_remote_path = run.remote_path
             run.started_at = utcnow()
+            restore_started_at = run.started_at
             set_run_progress(run, "preparing_restore", 5, "Preparing restore")
 
             work_root = tempfile.mkdtemp(prefix="fastimg-restore-", dir=backup_work_dir(app))
@@ -1014,19 +1119,38 @@ def execute_restore(app, run_id, backup_name, password):
                 db.session.remove()
                 db.engine.dispose()
                 restore_into_app(app, extract_dir)
+                restored_db_applied = True
             finally:
-                release_maintenance(owner)
+                if not restored_db_applied:
+                    release_maintenance(owner)
 
-            run.status = "success"
-            run.finished_at = utcnow()
-            set_run_progress(run, "done", 100, "Restore completed. Application restart is recommended.")
+            record_restore_result(
+                app,
+                backup_name,
+                restore_remote_path,
+                "success",
+                "Restore completed. Application restart is recommended.",
+                started_at=restore_started_at,
+            )
             shutil.rmtree(work_root, ignore_errors=True)
 
             if os.environ.get("FASTIMG_AUTO_EXIT_AFTER_RESTORE", "false").lower() == "true":
                 threading.Timer(2.0, lambda: os._exit(0)).start()
         except Exception as exc:
-            release_maintenance(owner)
-            if run:
+            if restored_db_applied:
+                record_restore_result(
+                    app,
+                    backup_name,
+                    restore_remote_path,
+                    "failed",
+                    str(exc),
+                    error=str(exc),
+                    started_at=restore_started_at,
+                )
+            else:
+                release_maintenance(owner)
+            if run and not restored_db_applied:
+                run = db.session.get(BackupRun, run_id) or run
                 run.status = "failed"
                 run.error = str(exc)
                 run.finished_at = utcnow()
@@ -1046,19 +1170,31 @@ def restore_into_app(app, extract_dir):
     rollback_uploads = os.path.join(rollback_root, "uploads")
     os.makedirs(rollback_data, exist_ok=True)
 
+    rollback_db = os.path.join(rollback_data, "database.db")
     if os.path.exists(db_file):
-        shutil.copy2(db_file, os.path.join(rollback_data, "database.db"))
+        shutil.copy2(db_file, rollback_db)
     if os.path.exists(uploads_dir):
         shutil.copytree(uploads_dir, rollback_uploads, dirs_exist_ok=True)
 
-    os.makedirs(os.path.dirname(db_file), exist_ok=True)
-    shutil.copy2(restore_db, db_file)
-    if os.path.exists(uploads_dir):
-        shutil.rmtree(uploads_dir)
-    if os.path.exists(restore_uploads):
-        shutil.copytree(restore_uploads, uploads_dir)
-    else:
+    try:
+        os.makedirs(os.path.dirname(db_file), exist_ok=True)
         os.makedirs(uploads_dir, exist_ok=True)
+
+        # Copy restored files before switching the DB. Do not pre-clear uploads:
+        # a failed restore must not leave image rows pointing at missing files.
+        if os.path.exists(restore_uploads):
+            copy_directory_contents(restore_uploads, uploads_dir)
+        validate_uploads_available_for_db(restore_db, uploads_dir)
+
+        shutil.copy2(restore_db, db_file)
+        ensure_backup_run_progress_columns(db_file)
+        sanitize_snapshot_db(db_file)
+    except Exception:
+        if os.path.exists(rollback_db):
+            shutil.copy2(rollback_db, db_file)
+        if os.path.exists(rollback_uploads):
+            replace_directory_contents(rollback_uploads, uploads_dir)
+        raise
 
     env_snapshot = os.path.join(extract_dir, "config", "fastimg-env.json")
     if os.path.exists(env_snapshot):

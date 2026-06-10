@@ -2017,23 +2017,10 @@ async function loadBackupPanel(options = {}) {
 
         const runs = runsData.runs || [];
         const activeRun = runs.find(isBackupRunActive);
-        let remoteData = {
+        const remoteData = {
             files: backupPanelState?.remoteFiles || [],
             remote_error: backupPanelState?.remoteError || ''
         };
-        if (cfgData.config.remote_path && !activeRun) {
-            try {
-                const remoteRes = await fetch(`/api/admin/backups/remote?limit=${getBackupListLimit()}`);
-                remoteData = await remoteRes.json();
-                if (!remoteRes.ok) remoteData.remote_error = remoteData.error || '远端列表加载失败';
-            } catch (e) {
-                remoteData.remote_error = '远端列表加载失败';
-            }
-        }
-
-        if (cfgData.config.remote_path && activeRun && !remoteData.files.length) {
-            remoteData.remote_error = '任务运行中，完成后会刷新远端列表';
-        }
 
         renderBackupPanel(cfgData.config, cfgData.provider || {}, cfgData.tools || {}, runs, remoteData.files || [], runsData.maintenance, remoteData.remote_error);
         scheduleBackupPolling(runs);
@@ -2069,7 +2056,7 @@ function scheduleBackupPolling(runs = []) {
 }
 
 function getBackupListLimit() {
-    const input = document.getElementById('backupListLimit');
+    const input = document.getElementById('backupRestoreLimit') || document.getElementById('backupListLimit');
     const raw = input ? input.value : backupListLimit;
     const value = parseInt(raw || '10', 10);
     return Number.isFinite(value) ? Math.max(1, Math.min(value, 100)) : 10;
@@ -2082,7 +2069,7 @@ function setBackupListLimit(value) {
 
 function refreshBackupList() {
     setBackupListLimit(getBackupListLimit());
-    loadBackupPanel();
+    loadBackupRestoreList();
 }
 
 function restoreSelectedBackup() {
@@ -2092,7 +2079,152 @@ function restoreSelectedBackup() {
         showToast('请先选择一份备份', 'error');
         return;
     }
-    restoreBackup(name);
+    submitRestoreBackup(name);
+}
+
+function ensureRestoreBackupModal() {
+    if (document.getElementById('backupRestoreModal')) return;
+    const overlay = document.createElement('div');
+    overlay.id = 'backupRestoreModal';
+    overlay.className = 'modal-overlay hidden';
+    overlay.innerHTML = `
+        <div class="modal modal-lg" style="max-width:760px">
+            <button class="close-modal" onclick="closeModal('backupRestoreModal')">&times;</button>
+            <div class="modal-header" style="padding-right:2rem">
+                <div>
+                    <h3>选择备份回档</h3>
+                    <p style="margin:0.35rem 0 0;color:var(--text-muted);font-size:0.86rem">查询最近备份，选择一份后输入恢复密码即可启动后台恢复。</p>
+                </div>
+            </div>
+            <div style="border:1px solid rgba(239,68,68,0.25);background:rgba(239,68,68,0.08);border-radius:var(--radius-sm);padding:0.85rem 1rem;margin-bottom:1rem;color:#fecaca;font-size:0.86rem">
+                回档会进入维护模式并替换当前数据库和上传文件。请确认你选择的是正确备份。
+            </div>
+            <div style="display:flex;align-items:center;gap:0.55rem;flex-wrap:wrap;margin-bottom:0.9rem">
+                <span style="font-size:0.85rem;color:var(--text-muted)">最近</span>
+                <input id="backupRestoreLimit" type="number" min="1" max="100" class="input-control" style="width:84px;height:36px;padding:0 0.6rem" value="${backupListLimit}">
+                <span style="font-size:0.85rem;color:var(--text-muted)">份备份</span>
+                <button class="btn btn-secondary btn-sm" onclick="refreshBackupList()">
+                    <i data-lucide="search" style="width:14px;height:14px"></i> 查询
+                </button>
+            </div>
+            <div id="backupRestoreList" style="border:1px solid var(--border);border-radius:var(--radius-sm);overflow:hidden;margin-bottom:1rem">
+                <div style="padding:1rem;color:var(--text-muted);text-align:center">等待查询备份列表...</div>
+            </div>
+            <div style="display:grid;grid-template-columns:1fr;gap:0.75rem;margin-bottom:1rem">
+                <div class="form-group" style="margin-bottom:0">
+                    <label>选择备份</label>
+                    <select id="backupRestoreSelect" class="input-control" onchange="syncRestoreSelectionLabel()">
+                        <option value="">请先查询并选择备份</option>
+                    </select>
+                </div>
+                <div class="form-group" style="margin-bottom:0">
+                    <label>恢复密码</label>
+                    <input id="backupRestorePassword" type="password" class="input-control" autocomplete="current-password" placeholder="输入恢复密码">
+                </div>
+            </div>
+            <div id="backupRestoreSelectedHint" style="font-size:0.8rem;color:var(--text-muted);margin-bottom:1rem">未选择备份</div>
+            <div style="display:flex;justify-content:flex-end;gap:0.6rem;flex-wrap:wrap">
+                <button class="btn btn-secondary" onclick="closeModal('backupRestoreModal')">取消</button>
+                <button id="backupRestoreSubmit" class="btn btn-danger" onclick="restoreSelectedBackup()">
+                    <i data-lucide="rotate-ccw" style="width:16px;height:16px"></i> 开始回档
+                </button>
+            </div>
+        </div>
+    `;
+    document.body.appendChild(overlay);
+    refreshIcons();
+}
+
+async function openRestoreBackupModal(preselectName = '') {
+    const activeRun = backupPanelState?.runs?.find(isBackupRunActive);
+    if (activeRun) {
+        showToast('已有备份或恢复任务正在运行', 'error');
+        return;
+    }
+    if (!backupPanelState?.config?.remote_path) {
+        showToast('请先配置云端连接', 'error');
+        return;
+    }
+    ensureRestoreBackupModal();
+    document.getElementById('backupRestoreLimit').value = backupListLimit;
+    document.getElementById('backupRestorePassword').value = '';
+    document.getElementById('backupRestoreSelect').innerHTML = '<option value="">请先查询并选择备份</option>';
+    document.getElementById('backupRestoreSelectedHint').textContent = '未选择备份';
+    showModal('backupRestoreModal');
+    await loadBackupRestoreList(preselectName);
+}
+
+async function loadBackupRestoreList(preselectName = '') {
+    ensureRestoreBackupModal();
+    setBackupListLimit(getBackupListLimit());
+    const listEl = document.getElementById('backupRestoreList');
+    const selectEl = document.getElementById('backupRestoreSelect');
+    listEl.innerHTML = '<div style="padding:1rem;color:var(--text-muted);text-align:center">正在查询远端备份...</div>';
+    selectEl.innerHTML = '<option value="">正在查询...</option>';
+    try {
+        const res = await fetch(`/api/admin/backups/remote?limit=${backupListLimit}`);
+        const data = await res.json();
+        if (!res.ok) throw new Error(data.error || '备份列表查询失败');
+        const files = (data.files || []).filter(file => file.is_backup);
+        renderRestoreBackupChoices(files, preselectName);
+    } catch (e) {
+        listEl.innerHTML = `<div style="padding:1rem;color:var(--danger);text-align:center">${escapeHtml(e.message || '备份列表查询失败')}</div>`;
+        selectEl.innerHTML = '<option value="">查询失败</option>';
+        syncRestoreSelectionLabel();
+    }
+}
+
+function renderRestoreBackupChoices(files, preselectName = '') {
+    const listEl = document.getElementById('backupRestoreList');
+    const selectEl = document.getElementById('backupRestoreSelect');
+    if (!files.length) {
+        listEl.innerHTML = '<div style="padding:1rem;color:var(--text-muted);text-align:center">远端暂无可回档备份</div>';
+        selectEl.innerHTML = '<option value="">暂无可回档备份</option>';
+        syncRestoreSelectionLabel();
+        return;
+    }
+
+    selectEl.innerHTML = files.map((file, index) => `
+        <option value="${escapeAttr(file.name)}" ${file.name === preselectName || (!preselectName && index === 0) ? 'selected' : ''}>
+            ${escapeHtml(file.name)} · ${file.size ? formatBackupBytes(file.size) : '未知大小'} · ${formatBackupDate(file.mod_time)}
+        </option>
+    `).join('');
+    listEl.innerHTML = `
+        <div style="overflow:auto;max-height:300px">
+            <table class="data-table">
+                <thead><tr><th>备份</th><th>大小</th><th>时间</th><th style="text-align:right">选择</th></tr></thead>
+                <tbody>
+                    ${files.map(file => `
+                        <tr>
+                            <td style="font-family:monospace;font-size:0.8rem">${escapeHtml(file.name)}</td>
+                            <td class="tabular-nums">${file.size ? formatBackupBytes(file.size) : '-'}</td>
+                            <td style="color:var(--text-muted)">${formatBackupDate(file.mod_time)}</td>
+                            <td style="text-align:right">
+                                <button class="btn btn-secondary btn-sm" onclick="selectRestoreBackup('${escapeAttr(file.name)}')">选择</button>
+                            </td>
+                        </tr>
+                    `).join('')}
+                </tbody>
+            </table>
+        </div>
+    `;
+    syncRestoreSelectionLabel();
+    refreshIcons();
+}
+
+function selectRestoreBackup(name) {
+    const selectEl = document.getElementById('backupRestoreSelect');
+    if (selectEl) selectEl.value = name;
+    syncRestoreSelectionLabel();
+}
+
+function syncRestoreSelectionLabel() {
+    const selectEl = document.getElementById('backupRestoreSelect');
+    const hintEl = document.getElementById('backupRestoreSelectedHint');
+    const name = selectEl?.value || '';
+    if (hintEl) {
+        hintEl.textContent = name ? `将回档到：${name}` : '未选择备份';
+    }
 }
 
 function renderBackupPanel(config, provider, tools, runs, remoteFiles, maintenance, remoteError) {
@@ -2132,23 +2264,6 @@ function renderBackupPanel(config, provider, tools, runs, remoteFiles, maintenan
             <td style="max-width:220px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;color:${run.error ? 'var(--danger)' : 'var(--text-muted)'}" title="${escapeHtml(run.error || run.log || '')}">${escapeHtml(run.error || run.log || '')}</td>
         </tr>
     `).join('') || '<tr><td colspan="7" style="text-align:center;padding:1rem;color:var(--text-muted)">暂无运行记录</td></tr>';
-
-    const backupFiles = remoteFiles.filter(f => f.is_backup);
-    const restoreOptions = backupFiles.map(file => `
-        <option value="${escapeAttr(file.name)}">${escapeHtml(file.name)} · ${file.size ? formatBackupBytes(file.size) : '未知大小'} · ${formatBackupDate(file.mod_time)}</option>
-    `).join('');
-    const remoteRows = backupFiles.map(file => `
-        <tr>
-            <td style="font-family:monospace;font-size:0.8rem">${escapeHtml(file.name)}</td>
-            <td class="tabular-nums">${file.size ? formatBackupBytes(file.size) : '-'}</td>
-            <td style="color:var(--text-muted)">${formatBackupDate(file.mod_time)}</td>
-            <td style="text-align:right">
-                <button class="btn btn-danger btn-sm" onclick="restoreBackup('${escapeAttr(file.name)}')" ${activeRun ? 'disabled' : ''}>
-                    <i data-lucide="rotate-ccw" style="width:14px;height:14px"></i> 恢复
-                </button>
-            </td>
-        </tr>
-    `).join('') || `<tr><td colspan="4" style="text-align:center;padding:1rem;color:var(--text-muted)">${remoteError ? escapeHtml(remoteError) : '暂无远端备份包'}</td></tr>`;
 
     panel.innerHTML = `
         ${maintenance ? `<div style="padding:0.85rem 1rem;border:1px solid var(--border);border-radius:var(--radius-sm);margin-bottom:1rem;color:var(--warning)">维护中：${escapeHtml(maintenance.reason || maintenance.mode || '')}</div>` : ''}
@@ -2226,41 +2341,13 @@ function renderBackupPanel(config, provider, tools, runs, remoteFiles, maintenan
                     <button class="btn btn-secondary" onclick="exportRecoveryKit()" ${config.has_identity ? '' : 'disabled'}>
                         <i data-lucide="download" style="width:16px;height:16px"></i> 导出恢复包
                     </button>
+                    <button class="btn btn-secondary" onclick="openRestoreBackupModal()" ${configured && !activeRun ? '' : 'disabled'}>
+                        <i data-lucide="history" style="width:16px;height:16px"></i> 选择回档
+                    </button>
                 </div>
             </section>
         </div>
-        <div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(280px,1fr));gap:1rem">
-            <div style="border:1px solid var(--border);border-radius:var(--radius-sm);overflow:hidden">
-                <div style="padding:0.75rem 1rem;background:rgba(0,0,0,0.25);display:flex;align-items:center;justify-content:space-between;gap:0.75rem;flex-wrap:wrap">
-                    <div>
-                        <div style="font-weight:600;font-size:0.85rem">最近备份列表</div>
-                        <div style="font-size:0.75rem;color:var(--text-muted)">从远端查询最近 N 份密文包，可选择一份回档</div>
-                    </div>
-                    <div style="display:flex;align-items:center;gap:0.45rem;flex-wrap:wrap">
-                        <span style="font-size:0.78rem;color:var(--text-muted)">最近</span>
-                        <input id="backupListLimit" type="number" min="1" max="100" class="input-control" style="width:76px;height:34px;padding:0 0.55rem" value="${backupListLimit}">
-                        <span style="font-size:0.78rem;color:var(--text-muted)">份</span>
-                        <button class="btn btn-secondary btn-sm" onclick="refreshBackupList()" ${activeRun ? 'disabled' : ''}>
-                            <i data-lucide="search" style="width:14px;height:14px"></i> 查询
-                        </button>
-                    </div>
-                </div>
-                <div style="padding:0.75rem 1rem;border-bottom:1px solid var(--border);display:flex;gap:0.5rem;flex-wrap:wrap;align-items:center">
-                    <select id="backupRestoreSelect" class="input-control" style="min-width:min(100%,360px);flex:1" ${backupFiles.length ? '' : 'disabled'}>
-                        ${restoreOptions || '<option value="">暂无可回档备份</option>'}
-                    </select>
-                    <button class="btn btn-danger btn-sm" onclick="restoreSelectedBackup()" ${backupFiles.length && !activeRun ? '' : 'disabled'}>
-                        <i data-lucide="rotate-ccw" style="width:14px;height:14px"></i> 回档选中
-                    </button>
-                </div>
-                <div style="overflow:auto;max-height:260px">
-                    <table class="data-table">
-                        <thead><tr><th>名称</th><th>大小</th><th>时间</th><th style="text-align:right">操作</th></tr></thead>
-                        <tbody>${remoteRows}</tbody>
-                    </table>
-                </div>
-            </div>
-            <div style="border:1px solid var(--border);border-radius:var(--radius-sm);overflow:hidden">
+        <div style="border:1px solid var(--border);border-radius:var(--radius-sm);overflow:hidden">
                 <div style="padding:0.75rem 1rem;background:rgba(0,0,0,0.25);font-weight:600;font-size:0.85rem">运行记录</div>
                 <div style="overflow:auto;max-height:260px">
                     <table class="data-table">
@@ -2268,7 +2355,6 @@ function renderBackupPanel(config, provider, tools, runs, remoteFiles, maintenan
                         <tbody>${latestRuns}</tbody>
                     </table>
                 </div>
-            </div>
         </div>
     `;
     refreshIcons();
@@ -2556,7 +2642,6 @@ async function testBackupRemote() {
 }
 
 async function runBackupNow() {
-    if (!confirm('立即创建加密备份并上传到远端?')) return;
     const res = await fetch('/api/admin/backups/run', { method: 'POST' });
     const data = await res.json();
     if (res.ok) {
@@ -2568,17 +2653,38 @@ async function runBackupNow() {
 }
 
 async function restoreBackup(name) {
-    const confirmWord = prompt(`恢复会进入维护模式并替换当前 data/uploads。\n请输入 RESTORE 确认恢复：${name}`);
-    if (confirmWord !== 'RESTORE') return;
-    const password = prompt('请输入备份密码用于解密恢复：');
-    if (!password) return;
+    openRestoreBackupModal(name);
+}
+
+async function submitRestoreBackup(name) {
+    const password = document.getElementById('backupRestorePassword')?.value || '';
+    if (!name) {
+        showToast('请先选择一份备份', 'error');
+        return;
+    }
+    if (!password) {
+        showToast('请输入恢复密码', 'error');
+        return;
+    }
+    const submitBtn = document.getElementById('backupRestoreSubmit');
+    if (submitBtn) {
+        submitBtn.disabled = true;
+        submitBtn.innerHTML = '<i data-lucide="loader-circle" style="width:16px;height:16px"></i> 正在启动...';
+        refreshIcons();
+    }
     const res = await fetch('/api/admin/backups/restore', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ backup_name: name, password })
     });
     const data = await res.json();
+    if (submitBtn) {
+        submitBtn.disabled = false;
+        submitBtn.innerHTML = '<i data-lucide="rotate-ccw" style="width:16px;height:16px"></i> 开始回档';
+        refreshIcons();
+    }
     if (res.ok) {
+        closeModal('backupRestoreModal');
         showToast('恢复任务已启动，完成后应用可能会重启');
         loadBackupPanel({ quiet: true });
     } else {
@@ -2588,8 +2694,10 @@ async function restoreBackup(name) {
 
 async function exportRecoveryKit() {
     let password = document.getElementById('backupPassword')?.value || '';
-    if (!password) password = prompt('请输入备份密码以导出恢复包：') || '';
-    if (!password) return;
+    if (!password) {
+        showToast('请先在备份密码框输入密码', 'error');
+        return;
+    }
 
     const res = await fetch('/api/admin/backups/export-recovery-kit', {
         method: 'POST',

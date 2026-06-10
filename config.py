@@ -12,6 +12,9 @@ class Config:
 
     # 上传配置
     UPLOAD_FOLDER = os.path.join(basedir, 'uploads')
+    FASTIMG_CONFIG_DIR = os.environ.get('FASTIMG_CONFIG_DIR') or os.path.join(basedir, 'config')
+    FASTIMG_BACKUP_WORK_DIR = os.environ.get('FASTIMG_BACKUP_WORK_DIR') or os.path.join(basedir, 'data', 'backup-work')
+    RCLONE_CONFIG_PATH = os.environ.get('RCLONE_CONFIG') or os.path.join(FASTIMG_CONFIG_DIR, 'rclone', 'rclone.conf')
     MAX_CONTENT_LENGTH = 100 * 1024 * 1024  # Flask Limit increased to 100MB, app logic handles specific limits
     ALLOWED_EXTENSIONS = {'png', 'jpg', 'jpeg', 'gif', 'webp', 'bmp'}
     

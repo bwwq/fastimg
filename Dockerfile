@@ -7,6 +7,11 @@ WORKDIR /app
 RUN apt-get update && apt-get install -y \
     libjpeg-dev \
     zlib1g-dev \
+    curl \
+    ca-certificates \
+    rclone \
+    age \
+    zstd \
     && rm -rf /var/lib/apt/lists/*
 
 COPY requirements.txt .
@@ -15,7 +20,7 @@ RUN pip install --no-cache-dir -r requirements.txt
 COPY . .
 
 # 创建必要的目录并设置权限
-RUN mkdir -p uploads && chmod 777 uploads
+RUN mkdir -p uploads data config/rclone && chmod 777 uploads data config
 # SQLite 数据库文件如果生成在根目录，也需要写权限，建议将 db 放在 data 目录挂载
 # 这里为了简单，假设 db 生成在 /app 下
 
@@ -27,4 +32,4 @@ EXPOSE 5000
 # Gunicorn 启动命令
 # 4 workers, gevent worker class (if installed) or sync
 # bind 0.0.0.0:5000
-CMD ["sh", "-c", "python init_db.py && gunicorn -w 4 -b 0.0.0.0:5000 app:app"]
+CMD ["sh", "-c", "python init_db.py && gunicorn -w ${WEB_CONCURRENCY:-1} -b 0.0.0.0:5000 app:app"]

@@ -2,13 +2,28 @@ import os
 from werkzeug.middleware.proxy_fix import ProxyFix
 import datetime
 import uuid
-from flask import Flask, request, jsonify, send_from_directory, render_template, abort
+from io import BytesIO
+from flask import Flask, request, jsonify, send_from_directory, render_template, abort, send_file
 from flask_login import login_user, logout_user, login_required, current_user
 from flask_wtf.csrf import CSRFProtect, generate_csrf, CSRFError
 from config import Config
 from extensions import db, login_manager, limiter, migrate
-from models import User, Image, ImageStat, SystemConfig, InviteCode, Folder
+from models import User, Image, ImageStat, SystemConfig, InviteCode, Folder, BackupRun
 from utils import process_and_save_image
+from backup_service import (
+    BackupError,
+    current_maintenance,
+    export_recovery_kit,
+    get_backup_config,
+    list_remote_backups,
+    setup_backup_password,
+    start_backup_async,
+    start_backup_scheduler,
+    start_restore_async,
+    test_remote,
+    tool_status,
+    update_backup_config,
+)
 
 csrf = CSRFProtect()
 
@@ -105,6 +120,35 @@ def create_app(config_class=Config):
     @app.errorhandler(CSRFError)
     def handle_csrf_error(e):
         return jsonify({'error': 'CSRF token missing or incorrect'}), 400
+
+    @app.before_request
+    def backup_scheduler_and_maintenance_guard():
+        start_backup_scheduler(app)
+
+        if request.method not in ('POST', 'PUT', 'PATCH', 'DELETE'):
+            return None
+
+        state = current_maintenance()
+        if not state:
+            return None
+
+        # Backup APIs need to stay reachable so admins can read status or start a
+        # restore command that will fail cleanly if another maintenance task owns the lock.
+        if request.path.startswith('/api/admin/backups'):
+            return None
+
+        return jsonify({
+            'error': '系统正在维护中，写入操作已暂停',
+            'maintenance': state.to_dict()
+        }), 503
+
+    def require_admin():
+        if not current_user.is_authenticated or current_user.role != 'admin':
+            abort(403)
+
+    def backup_error_response(exc):
+        app.logger.warning(f"Backup API error: {exc}")
+        return jsonify({'error': str(exc)}), 400
 
 
     # Context Processor (inject config to templates if needed, or global vars)
@@ -560,7 +604,7 @@ def create_app(config_class=Config):
         per_image_limit = SystemConfig.get('rate_limit_per_image', 0, type_func=int)
 
         try:
-            img = Image.query.filter_by(filename=filename).first()
+            img = None if current_maintenance() else Image.query.filter_by(filename=filename).first()
             if img and img.stats:
                 # 检查是否超过单图片每日限制
                 if per_image_limit > 0:
@@ -575,6 +619,130 @@ def create_app(config_class=Config):
         except Exception as e:
             app.logger.debug(f"Failed to update view count: {e}")
         return send_from_directory(app.config['UPLOAD_FOLDER'], filename)
+
+    @app.route('/api/admin/backups/config', methods=['GET', 'POST'])
+    @login_required
+    def admin_backup_config():
+        require_admin()
+        try:
+            if request.method == 'GET':
+                cfg = get_backup_config()
+                return jsonify({
+                    'config': cfg.to_dict(),
+                    'tools': tool_status(app)
+                })
+
+            data = request.get_json() or {}
+            cfg = update_backup_config(data)
+            return jsonify({
+                'message': 'Backup config saved',
+                'config': cfg.to_dict(),
+                'tools': tool_status(app)
+            })
+        except BackupError as e:
+            return backup_error_response(e)
+        except Exception as e:
+            return backup_error_response(e)
+
+    @app.route('/api/admin/backups/password', methods=['POST'])
+    @login_required
+    def admin_backup_password():
+        require_admin()
+        data = request.get_json() or {}
+        password = data.get('password')
+        if not password or len(password) < 10:
+            return jsonify({'error': '备份密码至少需要 10 个字符'}), 400
+        try:
+            cfg = setup_backup_password(app, password)
+            return jsonify({'message': 'Backup encryption is ready', 'config': cfg.to_dict()})
+        except BackupError as e:
+            return backup_error_response(e)
+        except Exception as e:
+            return backup_error_response(e)
+
+    @app.route('/api/admin/backups/test-remote', methods=['POST'])
+    @login_required
+    def admin_backup_test_remote():
+        require_admin()
+        try:
+            output = test_remote(app)
+            return jsonify({'message': 'Remote is reachable', 'output': output[-2000:]})
+        except BackupError as e:
+            return backup_error_response(e)
+        except Exception as e:
+            return backup_error_response(e)
+
+    @app.route('/api/admin/backups/run', methods=['POST'])
+    @login_required
+    def admin_backup_run():
+        require_admin()
+        try:
+            run = start_backup_async(app, trigger='manual')
+            return jsonify({'message': 'Backup queued', 'run': run.to_dict()}), 202
+        except BackupError as e:
+            return backup_error_response(e)
+        except Exception as e:
+            return backup_error_response(e)
+
+    @app.route('/api/admin/backups/runs')
+    @login_required
+    def admin_backup_runs():
+        require_admin()
+        runs = BackupRun.query.order_by(BackupRun.started_at.desc()).limit(50).all()
+        state = current_maintenance()
+        return jsonify({
+            'runs': [r.to_dict() for r in runs],
+            'maintenance': state.to_dict() if state else None
+        })
+
+    @app.route('/api/admin/backups/remote')
+    @login_required
+    def admin_backup_remote():
+        require_admin()
+        try:
+            return jsonify({'files': list_remote_backups(app)})
+        except BackupError as e:
+            return backup_error_response(e)
+        except Exception as e:
+            return backup_error_response(e)
+
+    @app.route('/api/admin/backups/restore', methods=['POST'])
+    @login_required
+    def admin_backup_restore():
+        require_admin()
+        data = request.get_json() or {}
+        password = data.get('password')
+        backup_name = data.get('backup_name')
+        if not password:
+            return jsonify({'error': 'Backup password is required'}), 400
+        try:
+            run = start_restore_async(app, backup_name, password)
+            return jsonify({'message': 'Restore queued', 'run': run.to_dict()}), 202
+        except BackupError as e:
+            return backup_error_response(e)
+        except Exception as e:
+            return backup_error_response(e)
+
+    @app.route('/api/admin/backups/export-recovery-kit', methods=['POST'])
+    @login_required
+    def admin_backup_export_recovery_kit():
+        require_admin()
+        data = request.get_json() or {}
+        password = data.get('password')
+        if not password:
+            return jsonify({'error': 'Backup password is required'}), 400
+        try:
+            payload = export_recovery_kit(app, password)
+            return send_file(
+                BytesIO(payload),
+                mimetype='application/octet-stream',
+                as_attachment=True,
+                download_name='fastimg-recovery-kit.enc'
+            )
+        except BackupError as e:
+            return backup_error_response(e)
+        except Exception as e:
+            return backup_error_response(e)
 
     @app.route('/api/admin/config', methods=['GET', 'POST'])
     @login_required

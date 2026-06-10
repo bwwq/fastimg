@@ -11,6 +11,11 @@ services:
     volumes:
       - ./uploads:/app/uploads
       - ./data:/app/data
+      - ./config:/app/config
     environment:
       - SECRET_KEY=${SECRET_KEY:-change-me-in-production}
       - DATABASE_URL=sqlite:////app/data/database.db
+      - FASTIMG_CONFIG_DIR=/app/config
+      - FASTIMG_BACKUP_WORK_DIR=/app/data/backup-work
+      - RCLONE_CONFIG=/app/config/rclone/rclone.conf
+      - FASTIMG_AUTO_EXIT_AFTER_RESTORE=true

@@ -22,6 +22,10 @@ uploads/*
 data/*
 !data/.gitkeep
 
+# Runtime config (rclone tokens, encrypted backup identity, recovery kits)
+config/*
+!config/.gitkeep
+
 # Environment variables
 .env
 

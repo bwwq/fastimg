@@ -1879,6 +1879,7 @@ async function loadAdminView() {
 
     // Load invites section in parallel
     loadInlineInvites();
+    loadBackupPanel();
 
     try {
         const res = await fetch('/api/admin/users');
@@ -1993,6 +1994,301 @@ async function loadAdminView() {
     } catch (e) {
         if (tbody) tbody.innerHTML = '<tr><td colspan="5" style="text-align:center;color:var(--danger)">加载失败</td></tr>';
     }
+}
+
+async function loadBackupPanel() {
+    const panel = document.getElementById('backupPanel');
+    const badge = document.getElementById('backupStatusBadge');
+    if (!panel) return;
+    panel.innerHTML = '<div style="text-align:center;padding:1rem;color:var(--text-muted)">加载备份状态...</div>';
+
+    try {
+        const [cfgRes, runsRes] = await Promise.all([
+            fetch('/api/admin/backups/config'),
+            fetch('/api/admin/backups/runs')
+        ]);
+        const cfgData = await cfgRes.json();
+        const runsData = await runsRes.json();
+        if (!cfgRes.ok) throw new Error(cfgData.error || '备份配置加载失败');
+
+        let remoteData = { files: [] };
+        if (cfgData.config.remote_path) {
+            try {
+                const remoteRes = await fetch('/api/admin/backups/remote');
+                remoteData = await remoteRes.json();
+                if (!remoteRes.ok) remoteData.remote_error = remoteData.error || '远端列表加载失败';
+            } catch (e) {
+                remoteData.remote_error = '远端列表加载失败';
+            }
+        }
+
+        renderBackupPanel(cfgData.config, cfgData.tools || {}, runsData.runs || [], remoteData.files || [], runsData.maintenance, remoteData.remote_error);
+    } catch (e) {
+        panel.innerHTML = `<div style="color:var(--danger);padding:1rem">${escapeHtml(e.message || '加载失败')}</div>`;
+        if (badge) {
+            badge.textContent = '异常';
+            badge.className = 'badge badge-inactive';
+        }
+    }
+}
+
+function renderBackupPanel(config, tools, runs, remoteFiles, maintenance, remoteError) {
+    const panel = document.getElementById('backupPanel');
+    const badge = document.getElementById('backupStatusBadge');
+    const configured = config.has_identity && config.remote_path;
+    if (badge) {
+        badge.textContent = configured ? (config.enabled ? '自动备份中' : '已配置') : '未完成配置';
+        badge.className = `badge ${configured ? 'badge-admin' : 'badge-user'}`;
+    }
+
+    const toolRows = ['age', 'age-keygen', 'zstd', 'rclone', 'rclone_config'].map(name => {
+        const ok = !!tools[name];
+        const label = name === 'rclone_config' ? 'rclone config' : name;
+        return `<span class="tag" style="border-color:${ok ? 'rgba(34,197,94,0.35)' : 'rgba(239,68,68,0.35)'}; color:${ok ? 'var(--success)' : 'var(--danger)'}">${label}: ${ok ? 'OK' : '缺失'}</span>`;
+    }).join('');
+
+    const latestRuns = runs.slice(0, 8).map(run => `
+        <tr>
+            <td style="font-family:monospace;font-size:0.8rem">${escapeHtml(run.backup_name || '-')}</td>
+            <td>${backupStatusLabel(run.status)}</td>
+            <td>${escapeHtml(run.trigger || '-')}</td>
+            <td class="tabular-nums">${run.size_bytes ? formatBackupBytes(run.size_bytes) : '-'}</td>
+            <td style="color:var(--text-muted)">${formatBackupDate(run.started_at)}</td>
+            <td style="max-width:220px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;color:${run.error ? 'var(--danger)' : 'var(--text-muted)'}" title="${escapeHtml(run.error || run.log || '')}">${escapeHtml(run.error || run.log || '')}</td>
+        </tr>
+    `).join('') || '<tr><td colspan="6" style="text-align:center;padding:1rem;color:var(--text-muted)">暂无运行记录</td></tr>';
+
+    const backupFiles = remoteFiles.filter(f => f.is_backup);
+    const remoteRows = backupFiles.map(file => `
+        <tr>
+            <td style="font-family:monospace;font-size:0.8rem">${escapeHtml(file.name)}</td>
+            <td class="tabular-nums">${file.size ? formatBackupBytes(file.size) : '-'}</td>
+            <td style="color:var(--text-muted)">${formatBackupDate(file.mod_time)}</td>
+            <td style="text-align:right">
+                <button class="btn btn-danger btn-sm" onclick="restoreBackup('${escapeAttr(file.name)}')">
+                    <i data-lucide="rotate-ccw" style="width:14px;height:14px"></i> 恢复
+                </button>
+            </td>
+        </tr>
+    `).join('') || `<tr><td colspan="4" style="text-align:center;padding:1rem;color:var(--text-muted)">${remoteError ? escapeHtml(remoteError) : '暂无远端备份包'}</td></tr>`;
+
+    panel.innerHTML = `
+        ${maintenance ? `<div style="padding:0.85rem 1rem;border:1px solid var(--border);border-radius:var(--radius-sm);margin-bottom:1rem;color:var(--warning)">维护中：${escapeHtml(maintenance.reason || maintenance.mode || '')}</div>` : ''}
+        <div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(260px,1fr));gap:1rem;margin-bottom:1rem">
+            <div style="display:flex;flex-direction:column;gap:0.85rem">
+                <div class="form-group" style="margin-bottom:0">
+                    <label>rclone 远端路径</label>
+                    <input id="backupRemotePath" class="input-control" placeholder="onedrive:fastimg-backups" value="${escapeAttr(config.remote_path || '')}">
+                </div>
+                <div style="display:grid;grid-template-columns:1fr 1fr 1fr;gap:0.75rem">
+                    <div class="form-group" style="margin-bottom:0">
+                        <label>备份时间</label>
+                        <input id="backupScheduleTime" type="time" class="input-control" value="${escapeAttr(config.schedule_time || '03:30')}">
+                    </div>
+                    <div class="form-group" style="margin-bottom:0">
+                        <label>保留份数</label>
+                        <input id="backupRetention" type="number" min="1" max="365" class="input-control" value="${config.retention_count || 7}">
+                    </div>
+                    <div class="form-group" style="margin-bottom:0">
+                        <label>时区</label>
+                        <input id="backupTimezone" class="input-control" value="${escapeAttr(config.timezone || 'Asia/Shanghai')}">
+                    </div>
+                </div>
+                <label class="checkbox-label" style="display:flex;align-items:center;gap:0.5rem">
+                    <input id="backupEnabled" type="checkbox" ${config.enabled ? 'checked' : ''}>
+                    启用定时备份
+                </label>
+                <div style="display:flex;gap:0.5rem;flex-wrap:wrap">
+                    <button class="btn btn-primary" onclick="saveBackupConfig()">
+                        <i data-lucide="save" style="width:16px;height:16px"></i> 保存配置
+                    </button>
+                    <button class="btn btn-secondary" onclick="testBackupRemote()">
+                        <i data-lucide="plug" style="width:16px;height:16px"></i> 测试远端
+                    </button>
+                    <button class="btn btn-secondary" onclick="loadBackupPanel()">
+                        <i data-lucide="refresh-cw" style="width:16px;height:16px"></i> 刷新
+                    </button>
+                </div>
+            </div>
+            <div style="display:flex;flex-direction:column;gap:0.85rem">
+                <div>
+                    <label style="display:block;font-size:0.85rem;margin-bottom:0.4rem;color:var(--text-secondary)">备份密码</label>
+                    <div style="display:flex;gap:0.5rem">
+                        <input id="backupPassword" type="password" class="input-control" placeholder="${config.has_identity ? '输入以验证或导出恢复包' : '首次配置，至少 10 位'}">
+                        <button class="btn btn-primary" onclick="setupBackupPassword()">
+                            <i data-lucide="key-round" style="width:16px;height:16px"></i>
+                        </button>
+                    </div>
+                    <p style="font-size:0.78rem;color:var(--text-muted);margin-top:0.45rem">密码不会上传明文；私钥会用它加密。丢失密码后无法恢复旧备份。</p>
+                </div>
+                <div style="display:flex;gap:0.5rem;flex-wrap:wrap">
+                    <button class="btn btn-primary" onclick="runBackupNow()" ${configured ? '' : 'disabled'}>
+                        <i data-lucide="cloud-upload" style="width:16px;height:16px"></i> 立即备份
+                    </button>
+                    <button class="btn btn-secondary" onclick="exportRecoveryKit()" ${config.has_identity ? '' : 'disabled'}>
+                        <i data-lucide="download" style="width:16px;height:16px"></i> 导出恢复包
+                    </button>
+                </div>
+                <div class="tags" style="margin:0">${toolRows}</div>
+            </div>
+        </div>
+        <div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(280px,1fr));gap:1rem">
+            <div style="border:1px solid var(--border);border-radius:var(--radius-sm);overflow:hidden">
+                <div style="padding:0.75rem 1rem;background:rgba(0,0,0,0.25);font-weight:600;font-size:0.85rem">远端密文包</div>
+                <div style="overflow:auto;max-height:260px">
+                    <table class="data-table">
+                        <thead><tr><th>名称</th><th>大小</th><th>时间</th><th style="text-align:right">操作</th></tr></thead>
+                        <tbody>${remoteRows}</tbody>
+                    </table>
+                </div>
+            </div>
+            <div style="border:1px solid var(--border);border-radius:var(--radius-sm);overflow:hidden">
+                <div style="padding:0.75rem 1rem;background:rgba(0,0,0,0.25);font-weight:600;font-size:0.85rem">运行记录</div>
+                <div style="overflow:auto;max-height:260px">
+                    <table class="data-table">
+                        <thead><tr><th>备份</th><th>状态</th><th>触发</th><th>大小</th><th>开始</th><th>消息</th></tr></thead>
+                        <tbody>${latestRuns}</tbody>
+                    </table>
+                </div>
+            </div>
+        </div>
+    `;
+    refreshIcons();
+}
+
+function backupStatusLabel(status) {
+    const color = status === 'success' ? 'var(--success)' : (status === 'failed' ? 'var(--danger)' : 'var(--warning)');
+    return `<span style="color:${color};font-weight:600">${escapeHtml(status || '-')}</span>`;
+}
+
+function formatBackupBytes(bytes) {
+    const n = Number(bytes || 0);
+    if (n >= 1024 * 1024 * 1024) return `${(n / 1024 / 1024 / 1024).toFixed(2)} GB`;
+    if (n >= 1024 * 1024) return `${(n / 1024 / 1024).toFixed(1)} MB`;
+    if (n >= 1024) return `${(n / 1024).toFixed(1)} KB`;
+    return `${n} B`;
+}
+
+function formatBackupDate(value) {
+    if (!value) return '-';
+    try { return new Date(value).toLocaleString(); } catch (e) { return '-'; }
+}
+
+function escapeAttr(str) {
+    return escapeHtml(String(str ?? '')).replace(/"/g, '&quot;');
+}
+
+async function saveBackupConfig() {
+    const payload = {
+        enabled: document.getElementById('backupEnabled')?.checked || false,
+        remote_path: document.getElementById('backupRemotePath')?.value || '',
+        schedule_time: document.getElementById('backupScheduleTime')?.value || '03:30',
+        timezone: document.getElementById('backupTimezone')?.value || 'Asia/Shanghai',
+        retention_count: parseInt(document.getElementById('backupRetention')?.value || '7', 10)
+    };
+    const res = await fetch('/api/admin/backups/config', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(payload)
+    });
+    const data = await res.json();
+    if (res.ok) {
+        showToast('备份配置已保存');
+        loadBackupPanel();
+    } else {
+        showToast(data.error || '保存失败', 'error');
+    }
+}
+
+async function setupBackupPassword() {
+    const password = document.getElementById('backupPassword')?.value || '';
+    if (password.length < 10) {
+        showToast('备份密码至少需要 10 位', 'error');
+        return;
+    }
+    const res = await fetch('/api/admin/backups/password', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ password })
+    });
+    const data = await res.json();
+    if (res.ok) {
+        document.getElementById('backupPassword').value = '';
+        showToast('备份加密密钥已就绪');
+        loadBackupPanel();
+    } else {
+        showToast(data.error || '密码配置失败', 'error');
+    }
+}
+
+async function testBackupRemote() {
+    const res = await fetch('/api/admin/backups/test-remote', { method: 'POST' });
+    const data = await res.json();
+    if (res.ok) {
+        showToast('远端连接正常');
+        loadBackupPanel();
+    } else {
+        showToast(data.error || '远端连接失败', 'error');
+    }
+}
+
+async function runBackupNow() {
+    if (!confirm('立即创建加密备份并上传到远端?')) return;
+    const res = await fetch('/api/admin/backups/run', { method: 'POST' });
+    const data = await res.json();
+    if (res.ok) {
+        showToast('备份任务已加入队列');
+        setTimeout(loadBackupPanel, 1000);
+    } else {
+        showToast(data.error || '备份启动失败', 'error');
+    }
+}
+
+async function restoreBackup(name) {
+    const confirmWord = prompt(`恢复会进入维护模式并替换当前 data/uploads。\n请输入 RESTORE 确认恢复：${name}`);
+    if (confirmWord !== 'RESTORE') return;
+    const password = prompt('请输入备份密码用于解密恢复：');
+    if (!password) return;
+    const res = await fetch('/api/admin/backups/restore', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ backup_name: name, password })
+    });
+    const data = await res.json();
+    if (res.ok) {
+        showToast('恢复任务已启动，完成后应用可能会重启');
+        setTimeout(loadBackupPanel, 1000);
+    } else {
+        showToast(data.error || '恢复启动失败', 'error');
+    }
+}
+
+async function exportRecoveryKit() {
+    let password = document.getElementById('backupPassword')?.value || '';
+    if (!password) password = prompt('请输入备份密码以导出恢复包：') || '';
+    if (!password) return;
+
+    const res = await fetch('/api/admin/backups/export-recovery-kit', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ password })
+    });
+    if (!res.ok) {
+        let data = {};
+        try { data = await res.json(); } catch (e) {}
+        showToast(data.error || '恢复包导出失败', 'error');
+        return;
+    }
+    const blob = await res.blob();
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement('a');
+    a.href = url;
+    a.download = 'fastimg-recovery-kit.enc';
+    document.body.appendChild(a);
+    a.click();
+    a.remove();
+    URL.revokeObjectURL(url);
+    showToast('恢复包已导出');
 }
 
 

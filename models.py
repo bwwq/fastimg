@@ -172,3 +172,83 @@ class InviteCode(db.Model):
             'valid': self.is_valid,
             'created_at': self.created_at.isoformat() if self.created_at else None
         }
+
+
+class BackupConfig(db.Model):
+    id = db.Column(db.Integer, primary_key=True)
+    enabled = db.Column(db.Boolean, default=False)
+    remote_path = db.Column(db.String(512), default='')
+    schedule_time = db.Column(db.String(5), default='03:30')
+    timezone = db.Column(db.String(64), default='Asia/Shanghai')
+    retention_count = db.Column(db.Integer, default=7)
+    encryption_recipient = db.Column(db.String(256), nullable=True)
+    encrypted_identity = db.Column(db.Text, nullable=True)
+    last_scheduled_for = db.Column(db.String(10), nullable=True)
+    created_at = db.Column(db.DateTime, default=lambda: datetime.now(timezone.utc))
+    updated_at = db.Column(db.DateTime, default=lambda: datetime.now(timezone.utc),
+                           onupdate=lambda: datetime.now(timezone.utc))
+
+    def to_dict(self):
+        return {
+            'id': self.id,
+            'enabled': bool(self.enabled),
+            'remote_path': self.remote_path or '',
+            'schedule_time': self.schedule_time or '03:30',
+            'timezone': self.timezone or 'Asia/Shanghai',
+            'retention_count': self.retention_count or 7,
+            'has_identity': bool(self.encrypted_identity and self.encryption_recipient),
+            'encryption_recipient': self.encryption_recipient,
+            'last_scheduled_for': self.last_scheduled_for,
+            'created_at': self.created_at.isoformat() if self.created_at else None,
+            'updated_at': self.updated_at.isoformat() if self.updated_at else None
+        }
+
+
+class BackupRun(db.Model):
+    id = db.Column(db.Integer, primary_key=True)
+    trigger = db.Column(db.String(32), default='manual')  # manual, scheduled, restore
+    status = db.Column(db.String(32), default='queued')  # queued, running, success, failed
+    backup_name = db.Column(db.String(256), nullable=True)
+    remote_path = db.Column(db.String(768), nullable=True)
+    size_bytes = db.Column(db.BigInteger, nullable=True)
+    sha256 = db.Column(db.String(64), nullable=True)
+    error = db.Column(db.Text, nullable=True)
+    log = db.Column(db.Text, nullable=True)
+    started_at = db.Column(db.DateTime, default=lambda: datetime.now(timezone.utc))
+    finished_at = db.Column(db.DateTime, nullable=True)
+
+    def to_dict(self):
+        return {
+            'id': self.id,
+            'trigger': self.trigger,
+            'status': self.status,
+            'backup_name': self.backup_name,
+            'remote_path': self.remote_path,
+            'size_bytes': self.size_bytes,
+            'sha256': self.sha256,
+            'error': self.error,
+            'log': self.log,
+            'started_at': self.started_at.isoformat() if self.started_at else None,
+            'finished_at': self.finished_at.isoformat() if self.finished_at else None
+        }
+
+
+class MaintenanceState(db.Model):
+    id = db.Column(db.Integer, primary_key=True)
+    active = db.Column(db.Boolean, default=False)
+    mode = db.Column(db.String(32), nullable=True)  # backup, restore
+    reason = db.Column(db.String(256), nullable=True)
+    owner = db.Column(db.String(128), nullable=True)
+    started_at = db.Column(db.DateTime, nullable=True)
+    updated_at = db.Column(db.DateTime, default=lambda: datetime.now(timezone.utc),
+                           onupdate=lambda: datetime.now(timezone.utc))
+
+    def to_dict(self):
+        return {
+            'active': bool(self.active),
+            'mode': self.mode,
+            'reason': self.reason,
+            'owner': self.owner,
+            'started_at': self.started_at.isoformat() if self.started_at else None,
+            'updated_at': self.updated_at.isoformat() if self.updated_at else None
+        }

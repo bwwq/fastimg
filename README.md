@@ -182,6 +182,58 @@ docker run -d \
 
 ---
 
+## 🔐 加密备份与灾难恢复
+
+FastImg 支持隐私优先的灾备：先在服务器本地生成一致快照，再打包、压缩、使用 `age` 加密，最后通过 `rclone` 上传到 OneDrive / Google Drive / S3 / WebDAV 等远端。
+
+- 云端不可见：照片内容、数据库内容、原始文件名、文件夹名、图片 URL 文件名、manifest。
+- 云端仍可见：备份包大小、上传时间、备份数量、远端路径和可读备份包名。
+- 备份密码只用于加密恢复身份；丢失后无法解密旧备份。
+
+### Docker 部署准备
+
+`docker-compose.yml` 已挂载 `./config:/app/config`，rclone 配置建议放在：
+
+```bash
+./config/rclone/rclone.conf
+```
+
+可以在宿主机先执行：
+
+```bash
+rclone config
+```
+
+然后把生成的配置复制到上面的路径。进入后台「系统管理 -> 备份与恢复」后：
+
+1. 填写 rclone 远端路径，例如 `onedrive:fastimg-backups`。
+2. 保存配置并测试远端。
+3. 设置独立备份密码。
+4. 启用定时备份或点击立即备份。
+5. 导出恢复包并离线保存一份。
+
+### 新服务器一键恢复
+
+新服务器安装 Docker、rclone、age、zstd 后，准备好 rclone 访问凭据，然后在项目目录执行：
+
+```bash
+FASTIMG_BACKUP_PASSWORD='你的备份密码' sh ./scripts/restore-from-remote.sh onedrive:fastimg-backups
+```
+
+脚本会选择远端最新的 `fastimg-backup-*.age`，下载加密身份和备份包，解密、校验、恢复 `data/database.db` 与 `uploads/`，再启动 Docker Compose。
+
+如果你手上有后台导出的离线恢复包，也可以一起提供：
+
+```bash
+FASTIMG_BACKUP_PASSWORD='你的备份密码' \
+FASTIMG_RECOVERY_KIT='./fastimg-recovery-kit.enc' \
+sh ./scripts/restore-from-remote.sh onedrive:fastimg-backups
+```
+
+恢复完成后，把域名 A/AAAA 记录改到新服务器 IP，并按原来的 Nginx/Caddy 反代配置接入即可。生产环境建议 DNS TTL 设置为 `300` 秒。
+
+---
+
 ## 📂 目录结构
 
 ```
@@ -195,6 +247,8 @@ docker run -d \
 ├── uploads/            # 图片存储目录 (需备份)
 ├── data/               # 数据目录 (需备份)
 │   └── database.db     # SQLite 数据库
+├── config/             # 运行配置目录 (rclone/备份身份，需私密保存)
+├── scripts/            # 灾难恢复脚本
 ├── static/             # 前端资源
 │   ├── css/            # 模块化样式 (base, components, layout, themes)
 │   ├── js/             # 前端逻辑

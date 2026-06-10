@@ -6,12 +6,13 @@ class Config:
     
     # 数据库配置
     basedir = os.path.abspath(os.path.dirname(__file__))
+    data_dir = os.path.join(basedir, 'data')
     SQLALCHEMY_DATABASE_URI = os.environ.get('DATABASE_URL') or \
-        'sqlite:///' + os.path.join(basedir, 'database.db')
+        'sqlite:///' + os.path.join(data_dir, 'database.db')
     SQLALCHEMY_TRACK_MODIFICATIONS = False
 
     # 上传配置
-    UPLOAD_FOLDER = os.path.join(basedir, 'uploads')
+    UPLOAD_FOLDER = os.environ.get('UPLOAD_FOLDER') or os.path.join(basedir, 'uploads')
     FASTIMG_CONFIG_DIR = os.environ.get('FASTIMG_CONFIG_DIR') or os.path.join(basedir, 'config')
     FASTIMG_BACKUP_WORK_DIR = os.environ.get('FASTIMG_BACKUP_WORK_DIR') or os.path.join(basedir, 'data', 'backup-work')
     RCLONE_CONFIG_PATH = os.environ.get('RCLONE_CONFIG') or os.path.join(FASTIMG_CONFIG_DIR, 'rclone', 'rclone.conf')
@@ -40,5 +41,7 @@ class Config:
 
     @staticmethod
     def init_app(app):
+        if not os.path.exists(Config.data_dir):
+            os.makedirs(Config.data_dir)
         if not os.path.exists(Config.UPLOAD_FOLDER):
             os.makedirs(Config.UPLOAD_FOLDER)

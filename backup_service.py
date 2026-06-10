@@ -4,6 +4,7 @@ import hashlib
 import io
 import json
 import os
+import re
 import shutil
 import sqlite3
 import subprocess
@@ -161,6 +162,134 @@ def run_cmd(args, app=None, input_data=None, timeout=600):
         detail = stderr or stdout or f"exit code {proc.returncode}"
         raise BackupError(f"Command failed: {' '.join(args)}\n{detail}")
     return proc
+
+
+def _clamp_percent(value):
+    try:
+        return max(0, min(100, int(round(float(value)))))
+    except (TypeError, ValueError):
+        return 0
+
+
+def set_run_progress(run, stage, percent=None, message=None, bytes_done=None, bytes_total=None):
+    if not run:
+        return
+    run.progress_stage = stage
+    if percent is not None:
+        run.progress_percent = _clamp_percent(percent)
+    if message is not None:
+        run.progress_message = message
+        run.log = message
+    if bytes_done is not None:
+        run.bytes_done = max(0, int(bytes_done))
+    if bytes_total is not None:
+        run.bytes_total = max(0, int(bytes_total))
+    run.progress_updated_at = utcnow()
+    db.session.commit()
+
+
+def _tail_file(path, start_pos=0):
+    if not path or not os.path.exists(path):
+        return start_pos, ""
+    with open(path, "rb") as f:
+        f.seek(start_pos)
+        chunk = f.read()
+        return f.tell(), chunk.decode("utf-8", errors="replace")
+
+
+def _parse_rclone_percent(text):
+    if "Transferred:" not in text:
+        return None
+    matches = re.findall(r"(\d+(?:\.\d+)?)%", text)
+    if not matches:
+        return None
+    try:
+        return max(0.0, min(100.0, float(matches[-1])))
+    except ValueError:
+        return None
+
+
+def _log_tail(path, limit=4000):
+    if not path or not os.path.exists(path):
+        return ""
+    with open(path, "rb") as f:
+        try:
+            f.seek(-limit, os.SEEK_END)
+        except OSError:
+            f.seek(0)
+        return f.read().decode("utf-8", errors="replace").strip()
+
+
+def rclone_copyto_with_progress(app, source, dest, run, stage, start_percent, end_percent, total_bytes=None, timeout=3600):
+    env = os.environ.copy()
+    rc_path = rclone_config_path(app)
+    if os.path.exists(rc_path):
+        env["RCLONE_CONFIG"] = rc_path
+
+    log_fd, log_path = tempfile.mkstemp(prefix="fastimg-rclone-", suffix=".log", dir=backup_work_dir(app))
+    os.close(log_fd)
+    args = [
+        "rclone", "copyto", source, dest,
+        "--stats", "1s",
+        "--stats-one-line",
+        "--stats-unit", "bytes",
+        "--stats-log-level", "NOTICE",
+        "--log-file", log_path,
+    ]
+    display_args = ["rclone", "copyto", source, dest]
+    set_run_progress(run, stage, start_percent, "Uploading encrypted backup", bytes_done=0, bytes_total=total_bytes)
+
+    proc = subprocess.Popen(
+        args,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
+        env=env,
+    )
+    started = time.monotonic()
+    log_pos = 0
+    last_reported = None
+
+    try:
+        while proc.poll() is None:
+            if time.monotonic() - started > timeout:
+                proc.kill()
+                raise BackupError(f"Command failed: {' '.join(display_args)}\nTimed out after {timeout} seconds")
+
+            log_pos, chunk = _tail_file(log_path, log_pos)
+            percent = _parse_rclone_percent(chunk)
+            if percent is not None and percent != last_reported:
+                span = max(0, end_percent - start_percent)
+                overall = start_percent + (span * percent / 100.0)
+                done = int(total_bytes * percent / 100.0) if total_bytes else None
+                message = f"Uploading encrypted backup ({percent:.0f}%)"
+                set_run_progress(run, stage, overall, message, bytes_done=done, bytes_total=total_bytes)
+                last_reported = percent
+            time.sleep(0.75)
+
+        log_pos, chunk = _tail_file(log_path, log_pos)
+        percent = _parse_rclone_percent(chunk)
+        if percent is not None:
+            span = max(0, end_percent - start_percent)
+            overall = start_percent + (span * percent / 100.0)
+            done = int(total_bytes * percent / 100.0) if total_bytes else None
+            set_run_progress(run, stage, overall, f"Uploading encrypted backup ({percent:.0f}%)", bytes_done=done, bytes_total=total_bytes)
+
+        stdout, stderr = proc.communicate()
+        if proc.returncode != 0:
+            detail = (
+                stderr.decode("utf-8", errors="replace").strip()
+                or stdout.decode("utf-8", errors="replace").strip()
+                or _log_tail(log_path)
+                or f"exit code {proc.returncode}"
+            )
+            raise BackupError(f"Command failed: {' '.join(display_args)}\n{detail}")
+
+        set_run_progress(run, stage, end_percent, "Encrypted backup uploaded", bytes_done=total_bytes, bytes_total=total_bytes)
+    finally:
+        try:
+            os.remove(log_path)
+        except OSError:
+            pass
 
 
 def rclone_obscure(app, value):
@@ -533,7 +662,7 @@ def write_restore_info(path):
         )
 
 
-def tar_zstd_age(app, cfg, source_dir, manifest, output_path):
+def tar_zstd_age(app, cfg, source_dir, manifest, output_path, progress_callback=None):
     require_tools("age", "zstd")
     manifest_path = os.path.join(source_dir, "manifest.json")
     with open(manifest_path, "w", encoding="utf-8") as f:
@@ -566,11 +695,29 @@ def tar_zstd_age(app, cfg, source_dir, manifest, output_path):
     zstd.stdout.close()
 
     try:
+        total_items = max(1, len(manifest["uploads"]) + 4)
+        completed_items = 0
+        last_progress_at = 0
+
+        def bump_progress(message):
+            nonlocal completed_items, last_progress_at
+            completed_items += 1
+            if not progress_callback:
+                return
+            now = time.monotonic()
+            if now - last_progress_at >= 0.75 or completed_items >= total_items:
+                progress_callback(completed_items / total_items, message)
+                last_progress_at = now
+
         with tarfile.open(fileobj=zstd.stdin, mode="w|") as tar:
             tar.add(os.path.join(source_dir, "data", "database.db"), arcname="data/database.db")
+            bump_progress("Packing database snapshot")
             tar.add(manifest_path, arcname="manifest.json")
+            bump_progress("Packing backup manifest")
             tar.add(env_path, arcname="config/fastimg-env.json")
+            bump_progress("Packing environment metadata")
             tar.add(restore_info, arcname="README-RESTORE.txt")
+            bump_progress("Packing restore guide")
             uploads_dir = app.config["UPLOAD_FOLDER"]
             uploads_info = tarfile.TarInfo("uploads")
             uploads_info.type = tarfile.DIRTYPE
@@ -578,6 +725,7 @@ def tar_zstd_age(app, cfg, source_dir, manifest, output_path):
             tar.addfile(uploads_info)
             for item in manifest["uploads"]:
                 tar.add(os.path.join(uploads_dir, item["filename"]), arcname=f"uploads/{item['filename']}")
+                bump_progress("Compressing and encrypting uploads")
     finally:
         if zstd.stdin:
             zstd.stdin.close()
@@ -593,7 +741,15 @@ def tar_zstd_age(app, cfg, source_dir, manifest, output_path):
 
 
 def create_backup_run(trigger="manual"):
-    run = BackupRun(trigger=trigger, status="queued", started_at=utcnow())
+    run = BackupRun(
+        trigger=trigger,
+        status="queued",
+        progress_stage="queued",
+        progress_percent=0,
+        progress_message="Queued",
+        started_at=utcnow(),
+        progress_updated_at=utcnow(),
+    )
     db.session.add(run)
     db.session.commit()
     return run
@@ -621,9 +777,7 @@ def execute_backup(app, run_id):
 
             run.status = "running"
             run.started_at = utcnow()
-            db.session.commit()
-
-            db.session.commit()
+            set_run_progress(run, "preparing", 3, "Preparing backup")
             acquire_maintenance("backup", "Creating encrypted backup snapshot", owner)
             encrypted_path = None
             try:
@@ -632,34 +786,55 @@ def execute_backup(app, run_id):
                 os.makedirs(os.path.join(source_dir, "data"), exist_ok=True)
                 snapshot_db = os.path.join(source_dir, "data", "database.db")
                 db_file = db_file_from_uri(app.config["SQLALCHEMY_DATABASE_URI"])
+                set_run_progress(run, "snapshot", 10, "Creating database snapshot")
                 sqlite_online_backup(db_file, snapshot_db)
+                set_run_progress(run, "snapshot", 15, "Sanitizing snapshot")
                 sanitize_snapshot_db(snapshot_db)
+                set_run_progress(run, "manifest", 22, "Building backup manifest")
                 manifest = build_manifest(app, snapshot_db)
 
                 stamp = datetime.now(ZoneInfo(cfg.timezone or "Asia/Shanghai")).strftime("%Y%m%d-%H%M%S")
                 name = f"{BACKUP_PREFIX}-{stamp}-{run_id}.age"
                 encrypted_path = os.path.join(work_root, name)
-                tar_zstd_age(app, cfg, source_dir, manifest, encrypted_path)
+                run.backup_name = name
+
+                def pack_progress(fraction, message):
+                    set_run_progress(run, "encrypting", 30 + (fraction * 25), message)
+
+                set_run_progress(run, "encrypting", 30, "Compressing and encrypting backup")
+                tar_zstd_age(app, cfg, source_dir, manifest, encrypted_path, progress_callback=pack_progress)
             finally:
                 release_maintenance(owner)
 
             encrypted_sha = sha256_file(encrypted_path)
             encrypted_size = os.path.getsize(encrypted_path)
             remote_dest = remote_join(cfg.remote_path, os.path.basename(encrypted_path))
+            run.remote_path = remote_dest
+            run.size_bytes = encrypted_size
+            run.sha256 = encrypted_sha
 
+            set_run_progress(run, "uploading_identity", 56, "Uploading recovery identity")
             _upload_identity_if_possible(app, cfg)
+            set_run_progress(run, "creating_remote_dir", 59, "Preparing remote directory")
             run_cmd(["rclone", "mkdir", cfg.remote_path], app=app, timeout=120)
-            run_cmd(["rclone", "copyto", encrypted_path, remote_dest], app=app, timeout=3600)
+            rclone_copyto_with_progress(
+                app,
+                encrypted_path,
+                remote_dest,
+                run,
+                "uploading_backup",
+                60,
+                94,
+                total_bytes=encrypted_size,
+                timeout=3600,
+            )
+            set_run_progress(run, "retention", 96, "Applying remote retention policy", bytes_done=encrypted_size, bytes_total=encrypted_size)
             apply_retention(app, cfg)
 
             run.status = "success"
             run.backup_name = os.path.basename(encrypted_path)
-            run.remote_path = remote_dest
-            run.size_bytes = encrypted_size
-            run.sha256 = encrypted_sha
             run.finished_at = utcnow()
-            run.log = "Encrypted backup uploaded successfully"
-            db.session.commit()
+            set_run_progress(run, "done", 100, "Encrypted backup uploaded successfully", bytes_done=encrypted_size, bytes_total=encrypted_size)
             shutil.rmtree(work_root, ignore_errors=True)
         except Exception as exc:
             release_maintenance(owner)
@@ -667,13 +842,13 @@ def execute_backup(app, run_id):
                 run.status = "failed"
                 run.error = str(exc)
                 run.finished_at = utcnow()
-                db.session.commit()
+                set_run_progress(run, "failed", run.progress_percent or 0, str(exc), bytes_done=run.bytes_done, bytes_total=run.bytes_total)
             if work_root:
                 shutil.rmtree(work_root, ignore_errors=True)
             app.logger.exception("Backup failed")
 
 
-def list_remote_backups(app, cfg=None):
+def list_remote_backups(app, cfg=None, limit=None):
     cfg = cfg or get_backup_config()
     if not cfg.remote_path:
         return []
@@ -694,6 +869,11 @@ def list_remote_backups(app, cfg=None):
                 "remote_path": remote_join(cfg.remote_path, name),
             })
     result.sort(key=lambda x: x.get("name") or "", reverse=True)
+    if limit:
+        keep = max(1, int(limit))
+        backups = [item for item in result if item["is_backup"]]
+        support_files = [item for item in result if not item["is_backup"]]
+        result = backups[:keep] + support_files
     return result
 
 
@@ -763,7 +943,16 @@ def _download_identity_blob(app, cfg):
 
 
 def start_restore_async(app, backup_name, password):
-    run = BackupRun(trigger="restore", status="queued", backup_name=backup_name, started_at=utcnow())
+    run = BackupRun(
+        trigger="restore",
+        status="queued",
+        progress_stage="queued",
+        progress_percent=0,
+        progress_message="Restore queued",
+        backup_name=backup_name,
+        started_at=utcnow(),
+        progress_updated_at=utcnow(),
+    )
     db.session.add(run)
     db.session.commit()
     thread = threading.Thread(target=execute_restore, args=(app, run.id, backup_name, password), daemon=True)
@@ -793,7 +982,7 @@ def execute_restore(app, run_id, backup_name, password):
             run.backup_name = backup_name
             run.remote_path = remote_join(cfg.remote_path, backup_name)
             run.started_at = utcnow()
-            db.session.commit()
+            set_run_progress(run, "preparing_restore", 5, "Preparing restore")
 
             work_root = tempfile.mkdtemp(prefix="fastimg-restore-", dir=backup_work_dir(app))
             backup_age = os.path.join(work_root, backup_name)
@@ -803,17 +992,23 @@ def execute_restore(app, run_id, backup_name, password):
             extract_dir = os.path.join(work_root, "extract")
             os.makedirs(extract_dir, exist_ok=True)
 
+            set_run_progress(run, "downloading_identity", 15, "Downloading recovery identity")
             identity_blob = _download_identity_blob(app, cfg)
             identity = decrypt_secret(identity_blob, password)
             with open(identity_path, "wb") as f:
                 f.write(identity)
 
+            set_run_progress(run, "downloading_backup", 25, "Downloading encrypted backup")
             run_cmd(["rclone", "copyto", run.remote_path, backup_age], app=app, timeout=3600)
+            set_run_progress(run, "decrypting", 55, "Decrypting backup package")
             run_cmd(["age", "-d", "-i", identity_path, "-o", tar_zst, backup_age], app=app, timeout=3600)
+            set_run_progress(run, "decompressing", 68, "Decompressing backup package")
             run_cmd(["zstd", "-d", "-f", tar_zst, "-o", tar_path], app=app, timeout=3600)
             safe_extract_tar(tar_path, extract_dir)
+            set_run_progress(run, "validating", 78, "Validating backup package")
             validate_extracted_backup(extract_dir)
 
+            set_run_progress(run, "restoring", 88, "Restoring files and database")
             acquire_maintenance("restore", "Restoring encrypted backup", owner)
             try:
                 db.session.remove()
@@ -824,8 +1019,7 @@ def execute_restore(app, run_id, backup_name, password):
 
             run.status = "success"
             run.finished_at = utcnow()
-            run.log = "Restore completed. Application restart is recommended."
-            db.session.commit()
+            set_run_progress(run, "done", 100, "Restore completed. Application restart is recommended.")
             shutil.rmtree(work_root, ignore_errors=True)
 
             if os.environ.get("FASTIMG_AUTO_EXIT_AFTER_RESTORE", "false").lower() == "true":
@@ -836,7 +1030,7 @@ def execute_restore(app, run_id, backup_name, password):
                 run.status = "failed"
                 run.error = str(exc)
                 run.finished_at = utcnow()
-                db.session.commit()
+                set_run_progress(run, "failed", run.progress_percent or 0, str(exc))
             if work_root:
                 shutil.rmtree(work_root, ignore_errors=True)
             app.logger.exception("Restore failed")

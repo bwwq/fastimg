@@ -208,6 +208,11 @@ class BackupRun(db.Model):
     id = db.Column(db.Integer, primary_key=True)
     trigger = db.Column(db.String(32), default='manual')  # manual, scheduled, restore
     status = db.Column(db.String(32), default='queued')  # queued, running, success, failed
+    progress_stage = db.Column(db.String(64), default='queued')
+    progress_percent = db.Column(db.Integer, default=0)
+    progress_message = db.Column(db.String(256), nullable=True)
+    bytes_done = db.Column(db.BigInteger, nullable=True)
+    bytes_total = db.Column(db.BigInteger, nullable=True)
     backup_name = db.Column(db.String(256), nullable=True)
     remote_path = db.Column(db.String(768), nullable=True)
     size_bytes = db.Column(db.BigInteger, nullable=True)
@@ -216,12 +221,18 @@ class BackupRun(db.Model):
     log = db.Column(db.Text, nullable=True)
     started_at = db.Column(db.DateTime, default=lambda: datetime.now(timezone.utc))
     finished_at = db.Column(db.DateTime, nullable=True)
+    progress_updated_at = db.Column(db.DateTime, default=lambda: datetime.now(timezone.utc))
 
     def to_dict(self):
         return {
             'id': self.id,
             'trigger': self.trigger,
             'status': self.status,
+            'progress_stage': self.progress_stage,
+            'progress_percent': self.progress_percent or 0,
+            'progress_message': self.progress_message,
+            'bytes_done': self.bytes_done,
+            'bytes_total': self.bytes_total,
             'backup_name': self.backup_name,
             'remote_path': self.remote_path,
             'size_bytes': self.size_bytes,
@@ -229,7 +240,8 @@ class BackupRun(db.Model):
             'error': self.error,
             'log': self.log,
             'started_at': self.started_at.isoformat() if self.started_at else None,
-            'finished_at': self.finished_at.isoformat() if self.finished_at else None
+            'finished_at': self.finished_at.isoformat() if self.finished_at else None,
+            'progress_updated_at': self.progress_updated_at.isoformat() if self.progress_updated_at else None
         }
 
 

@@ -91,6 +91,20 @@ def _ensure_db_compatible(app):
             if not has_column('image_stat', 'last_referer'):
                 cursor.execute("ALTER TABLE image_stat ADD COLUMN last_referer VARCHAR(256)")
 
+        if has_table('backup_run'):
+            if not has_column('backup_run', 'progress_stage'):
+                cursor.execute("ALTER TABLE backup_run ADD COLUMN progress_stage VARCHAR(64) DEFAULT 'queued'")
+            if not has_column('backup_run', 'progress_percent'):
+                cursor.execute("ALTER TABLE backup_run ADD COLUMN progress_percent INTEGER DEFAULT 0")
+            if not has_column('backup_run', 'progress_message'):
+                cursor.execute("ALTER TABLE backup_run ADD COLUMN progress_message VARCHAR(256)")
+            if not has_column('backup_run', 'bytes_done'):
+                cursor.execute("ALTER TABLE backup_run ADD COLUMN bytes_done BIGINT")
+            if not has_column('backup_run', 'bytes_total'):
+                cursor.execute("ALTER TABLE backup_run ADD COLUMN bytes_total BIGINT")
+            if not has_column('backup_run', 'progress_updated_at'):
+                cursor.execute("ALTER TABLE backup_run ADD COLUMN progress_updated_at DATETIME")
+
         conn.commit()
     except Exception as e:
         app.logger.warning(f"DB compat check: {e}")
@@ -722,7 +736,8 @@ def create_app(config_class=Config):
     def admin_backup_remote():
         require_admin()
         try:
-            return jsonify({'files': list_remote_backups(app)})
+            limit = request.args.get('limit', type=int)
+            return jsonify({'files': list_remote_backups(app, limit=limit)})
         except BackupError as e:
             return backup_error_response(e)
         except Exception as e:

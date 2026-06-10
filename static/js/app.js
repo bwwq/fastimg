@@ -1996,11 +1996,14 @@ async function loadAdminView() {
     }
 }
 
-async function loadBackupPanel() {
+async function loadBackupPanel(options = {}) {
     const panel = document.getElementById('backupPanel');
     const badge = document.getElementById('backupStatusBadge');
     if (!panel) return;
-    panel.innerHTML = '<div style="text-align:center;padding:1rem;color:var(--text-muted)">加载备份状态...</div>';
+    const quiet = !!options.quiet;
+    if (!quiet) {
+        panel.innerHTML = '<div style="text-align:center;padding:1rem;color:var(--text-muted)">加载备份状态...</div>';
+    }
 
     try {
         const [cfgRes, runsRes] = await Promise.all([
@@ -2010,11 +2013,17 @@ async function loadBackupPanel() {
         const cfgData = await cfgRes.json();
         const runsData = await runsRes.json();
         if (!cfgRes.ok) throw new Error(cfgData.error || '备份配置加载失败');
+        if (!runsRes.ok) throw new Error(runsData.error || '备份运行记录加载失败');
 
-        let remoteData = { files: [] };
-        if (cfgData.config.remote_path) {
+        const runs = runsData.runs || [];
+        const activeRun = runs.find(isBackupRunActive);
+        let remoteData = {
+            files: backupPanelState?.remoteFiles || [],
+            remote_error: backupPanelState?.remoteError || ''
+        };
+        if (cfgData.config.remote_path && !activeRun) {
             try {
-                const remoteRes = await fetch('/api/admin/backups/remote');
+                const remoteRes = await fetch(`/api/admin/backups/remote?limit=${getBackupListLimit()}`);
                 remoteData = await remoteRes.json();
                 if (!remoteRes.ok) remoteData.remote_error = remoteData.error || '远端列表加载失败';
             } catch (e) {
@@ -2022,7 +2031,12 @@ async function loadBackupPanel() {
             }
         }
 
-        renderBackupPanel(cfgData.config, cfgData.provider || {}, cfgData.tools || {}, runsData.runs || [], remoteData.files || [], runsData.maintenance, remoteData.remote_error);
+        if (cfgData.config.remote_path && activeRun && !remoteData.files.length) {
+            remoteData.remote_error = '任务运行中，完成后会刷新远端列表';
+        }
+
+        renderBackupPanel(cfgData.config, cfgData.provider || {}, cfgData.tools || {}, runs, remoteData.files || [], runsData.maintenance, remoteData.remote_error);
+        scheduleBackupPolling(runs);
     } catch (e) {
         panel.innerHTML = `<div style="color:var(--danger);padding:1rem">${escapeHtml(e.message || '加载失败')}</div>`;
         if (badge) {
@@ -2034,6 +2048,52 @@ async function loadBackupPanel() {
 
 let backupProviderMode = null;
 let backupPanelState = null;
+let backupPollTimer = null;
+let backupListLimit = (() => {
+    const saved = parseInt(localStorage.getItem('backupListLimit') || '10', 10);
+    return Number.isFinite(saved) ? Math.max(1, Math.min(saved, 100)) : 10;
+})();
+
+function isBackupRunActive(run) {
+    return run && ['queued', 'running'].includes(run.status);
+}
+
+function scheduleBackupPolling(runs = []) {
+    if (backupPollTimer) {
+        clearTimeout(backupPollTimer);
+        backupPollTimer = null;
+    }
+    if (runs.some(isBackupRunActive)) {
+        backupPollTimer = setTimeout(() => loadBackupPanel({ quiet: true }), 2000);
+    }
+}
+
+function getBackupListLimit() {
+    const input = document.getElementById('backupListLimit');
+    const raw = input ? input.value : backupListLimit;
+    const value = parseInt(raw || '10', 10);
+    return Number.isFinite(value) ? Math.max(1, Math.min(value, 100)) : 10;
+}
+
+function setBackupListLimit(value) {
+    backupListLimit = Math.max(1, Math.min(parseInt(value || '10', 10) || 10, 100));
+    localStorage.setItem('backupListLimit', String(backupListLimit));
+}
+
+function refreshBackupList() {
+    setBackupListLimit(getBackupListLimit());
+    loadBackupPanel();
+}
+
+function restoreSelectedBackup() {
+    const select = document.getElementById('backupRestoreSelect');
+    const name = select?.value || '';
+    if (!name) {
+        showToast('请先选择一份备份', 'error');
+        return;
+    }
+    restoreBackup(name);
+}
 
 function renderBackupPanel(config, provider, tools, runs, remoteFiles, maintenance, remoteError) {
     backupPanelState = { config, provider, tools, runs, remoteFiles, maintenance, remoteError };
@@ -2044,8 +2104,14 @@ function renderBackupPanel(config, provider, tools, runs, remoteFiles, maintenan
     const panel = document.getElementById('backupPanel');
     const badge = document.getElementById('backupStatusBadge');
     const configured = config.has_identity && config.remote_path;
+    const activeRun = runs.find(isBackupRunActive);
     if (badge) {
-        badge.textContent = configured ? (config.enabled ? '自动备份中' : '已配置') : '未完成配置';
+        if (activeRun) {
+            const verb = activeRun.trigger === 'restore' ? '恢复中' : '备份中';
+            badge.textContent = `${verb} ${backupProgressPercent(activeRun)}%`;
+        } else {
+            badge.textContent = configured ? (config.enabled ? '自动备份中' : '已配置') : '未完成配置';
+        }
         badge.className = `badge ${configured ? 'badge-admin' : 'badge-user'}`;
     }
 
@@ -2059,21 +2125,25 @@ function renderBackupPanel(config, provider, tools, runs, remoteFiles, maintenan
         <tr>
             <td style="font-family:monospace;font-size:0.8rem">${escapeHtml(run.backup_name || '-')}</td>
             <td>${backupStatusLabel(run.status)}</td>
+            <td>${renderRunProgressMini(run)}</td>
             <td>${escapeHtml(run.trigger || '-')}</td>
             <td class="tabular-nums">${run.size_bytes ? formatBackupBytes(run.size_bytes) : '-'}</td>
             <td style="color:var(--text-muted)">${formatBackupDate(run.started_at)}</td>
             <td style="max-width:220px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;color:${run.error ? 'var(--danger)' : 'var(--text-muted)'}" title="${escapeHtml(run.error || run.log || '')}">${escapeHtml(run.error || run.log || '')}</td>
         </tr>
-    `).join('') || '<tr><td colspan="6" style="text-align:center;padding:1rem;color:var(--text-muted)">暂无运行记录</td></tr>';
+    `).join('') || '<tr><td colspan="7" style="text-align:center;padding:1rem;color:var(--text-muted)">暂无运行记录</td></tr>';
 
     const backupFiles = remoteFiles.filter(f => f.is_backup);
+    const restoreOptions = backupFiles.map(file => `
+        <option value="${escapeAttr(file.name)}">${escapeHtml(file.name)} · ${file.size ? formatBackupBytes(file.size) : '未知大小'} · ${formatBackupDate(file.mod_time)}</option>
+    `).join('');
     const remoteRows = backupFiles.map(file => `
         <tr>
             <td style="font-family:monospace;font-size:0.8rem">${escapeHtml(file.name)}</td>
             <td class="tabular-nums">${file.size ? formatBackupBytes(file.size) : '-'}</td>
             <td style="color:var(--text-muted)">${formatBackupDate(file.mod_time)}</td>
             <td style="text-align:right">
-                <button class="btn btn-danger btn-sm" onclick="restoreBackup('${escapeAttr(file.name)}')">
+                <button class="btn btn-danger btn-sm" onclick="restoreBackup('${escapeAttr(file.name)}')" ${activeRun ? 'disabled' : ''}>
                     <i data-lucide="rotate-ccw" style="width:14px;height:14px"></i> 恢复
                 </button>
             </td>
@@ -2082,6 +2152,7 @@ function renderBackupPanel(config, provider, tools, runs, remoteFiles, maintenan
 
     panel.innerHTML = `
         ${maintenance ? `<div style="padding:0.85rem 1rem;border:1px solid var(--border);border-radius:var(--radius-sm);margin-bottom:1rem;color:var(--warning)">维护中：${escapeHtml(maintenance.reason || maintenance.mode || '')}</div>` : ''}
+        ${renderActiveBackupProgress(activeRun)}
         <div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(320px,1fr));gap:1rem;margin-bottom:1rem">
             <section style="border:1px solid var(--border);border-radius:var(--radius-sm);padding:1rem">
                 <div style="display:flex;justify-content:space-between;gap:1rem;align-items:center;margin-bottom:1rem">
@@ -2149,8 +2220,8 @@ function renderBackupPanel(config, provider, tools, runs, remoteFiles, maintenan
                     <button class="btn btn-secondary" onclick="saveBackupConfig()">
                         <i data-lucide="save" style="width:16px;height:16px"></i> 保存策略
                     </button>
-                    <button class="btn btn-primary" onclick="runBackupNow()" ${configured ? '' : 'disabled'}>
-                        <i data-lucide="cloud-upload" style="width:16px;height:16px"></i> 立即备份
+                    <button class="btn btn-primary" onclick="runBackupNow()" ${configured && !activeRun ? '' : 'disabled'}>
+                        <i data-lucide="cloud-upload" style="width:16px;height:16px"></i> ${activeRun ? '任务运行中' : '立即备份'}
                     </button>
                     <button class="btn btn-secondary" onclick="exportRecoveryKit()" ${config.has_identity ? '' : 'disabled'}>
                         <i data-lucide="download" style="width:16px;height:16px"></i> 导出恢复包
@@ -2160,7 +2231,28 @@ function renderBackupPanel(config, provider, tools, runs, remoteFiles, maintenan
         </div>
         <div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(280px,1fr));gap:1rem">
             <div style="border:1px solid var(--border);border-radius:var(--radius-sm);overflow:hidden">
-                <div style="padding:0.75rem 1rem;background:rgba(0,0,0,0.25);font-weight:600;font-size:0.85rem">远端密文包</div>
+                <div style="padding:0.75rem 1rem;background:rgba(0,0,0,0.25);display:flex;align-items:center;justify-content:space-between;gap:0.75rem;flex-wrap:wrap">
+                    <div>
+                        <div style="font-weight:600;font-size:0.85rem">最近备份列表</div>
+                        <div style="font-size:0.75rem;color:var(--text-muted)">从远端查询最近 N 份密文包，可选择一份回档</div>
+                    </div>
+                    <div style="display:flex;align-items:center;gap:0.45rem;flex-wrap:wrap">
+                        <span style="font-size:0.78rem;color:var(--text-muted)">最近</span>
+                        <input id="backupListLimit" type="number" min="1" max="100" class="input-control" style="width:76px;height:34px;padding:0 0.55rem" value="${backupListLimit}">
+                        <span style="font-size:0.78rem;color:var(--text-muted)">份</span>
+                        <button class="btn btn-secondary btn-sm" onclick="refreshBackupList()" ${activeRun ? 'disabled' : ''}>
+                            <i data-lucide="search" style="width:14px;height:14px"></i> 查询
+                        </button>
+                    </div>
+                </div>
+                <div style="padding:0.75rem 1rem;border-bottom:1px solid var(--border);display:flex;gap:0.5rem;flex-wrap:wrap;align-items:center">
+                    <select id="backupRestoreSelect" class="input-control" style="min-width:min(100%,360px);flex:1" ${backupFiles.length ? '' : 'disabled'}>
+                        ${restoreOptions || '<option value="">暂无可回档备份</option>'}
+                    </select>
+                    <button class="btn btn-danger btn-sm" onclick="restoreSelectedBackup()" ${backupFiles.length && !activeRun ? '' : 'disabled'}>
+                        <i data-lucide="rotate-ccw" style="width:14px;height:14px"></i> 回档选中
+                    </button>
+                </div>
                 <div style="overflow:auto;max-height:260px">
                     <table class="data-table">
                         <thead><tr><th>名称</th><th>大小</th><th>时间</th><th style="text-align:right">操作</th></tr></thead>
@@ -2172,7 +2264,7 @@ function renderBackupPanel(config, provider, tools, runs, remoteFiles, maintenan
                 <div style="padding:0.75rem 1rem;background:rgba(0,0,0,0.25);font-weight:600;font-size:0.85rem">运行记录</div>
                 <div style="overflow:auto;max-height:260px">
                     <table class="data-table">
-                        <thead><tr><th>备份</th><th>状态</th><th>触发</th><th>大小</th><th>开始</th><th>消息</th></tr></thead>
+                        <thead><tr><th>备份</th><th>状态</th><th>进度</th><th>触发</th><th>大小</th><th>开始</th><th>消息</th></tr></thead>
                         <tbody>${latestRuns}</tbody>
                     </table>
                 </div>
@@ -2261,6 +2353,86 @@ function renderBackupProviderForm(provider, config) {
             <label>rclone 路径</label>
             <input id="backupCustomRemotePath" class="input-control" placeholder="remote:path" value="${escapeAttr(config.remote_path || '')}">
         </div>
+    `;
+}
+
+function backupProgressPercent(run) {
+    if (!run) return 0;
+    if (run.status === 'success') return 100;
+    const value = Number(run.progress_percent || 0);
+    return Math.max(0, Math.min(100, Math.round(Number.isFinite(value) ? value : 0)));
+}
+
+function backupStageLabel(stage, trigger) {
+    const backupLabels = {
+        queued: '排队中',
+        preparing: '准备中',
+        snapshot: '创建快照',
+        manifest: '生成清单',
+        encrypting: '压缩加密',
+        uploading_identity: '上传恢复身份',
+        creating_remote_dir: '准备远端目录',
+        uploading_backup: '上传密文包',
+        retention: '清理旧备份',
+        done: '完成',
+        failed: '失败'
+    };
+    const restoreLabels = {
+        queued: '排队中',
+        preparing_restore: '准备恢复',
+        downloading_identity: '下载身份',
+        downloading_backup: '下载备份',
+        decrypting: '解密',
+        decompressing: '解压',
+        validating: '校验',
+        restoring: '恢复数据',
+        done: '完成',
+        failed: '失败'
+    };
+    const labels = trigger === 'restore' ? restoreLabels : backupLabels;
+    return labels[stage] || stage || '处理中';
+}
+
+function renderRunProgressMini(run) {
+    const percent = backupProgressPercent(run);
+    const stage = backupStageLabel(run.progress_stage, run.trigger);
+    const muted = run.status === 'success' || run.status === 'failed' ? 'var(--text-muted)' : 'var(--text-secondary)';
+    return `
+        <div style="min-width:92px">
+            <div style="font-size:0.78rem;color:${muted};margin-bottom:0.25rem">${escapeHtml(stage)} · ${percent}%</div>
+            <div class="progress-bar-bg" style="height:4px">
+                <div class="progress-bar-fill" style="width:${percent}%;background:${run.status === 'failed' ? 'var(--danger)' : ''}"></div>
+            </div>
+        </div>
+    `;
+}
+
+function renderActiveBackupProgress(run) {
+    if (!run) return '';
+    const percent = backupProgressPercent(run);
+    const stage = backupStageLabel(run.progress_stage, run.trigger);
+    const title = run.trigger === 'restore' ? '恢复任务正在后台执行' : '备份任务正在后台执行';
+    const detail = run.progress_message || stage;
+    const bytes = run.bytes_total
+        ? `${formatBackupBytes(run.bytes_done || 0)} / ${formatBackupBytes(run.bytes_total)}`
+        : '等待可统计的传输数据';
+    return `
+        <section style="border:1px solid rgba(34,211,238,0.35);background:linear-gradient(135deg,rgba(34,211,238,0.08),rgba(255,255,255,0.035));border-radius:var(--radius-sm);padding:1rem;margin-bottom:1rem;box-shadow:0 0 28px rgba(34,211,238,0.08)">
+            <div style="display:flex;align-items:flex-start;justify-content:space-between;gap:1rem;margin-bottom:0.8rem">
+                <div>
+                    <div style="font-weight:700;margin-bottom:0.25rem">${title}</div>
+                    <div style="font-size:0.82rem;color:var(--text-muted)">任务 #${run.id} · ${escapeHtml(stage)} · 刷新页面后会自动接回进度</div>
+                </div>
+                <div style="font-size:1.3rem;font-weight:800;color:var(--text-primary)" class="tabular-nums">${percent}%</div>
+            </div>
+            <div class="progress-bar-bg" style="height:10px;margin-bottom:0.65rem">
+                <div class="progress-bar-fill" style="width:${percent}%;background:linear-gradient(90deg,#22d3ee,#a7f3d0)"></div>
+            </div>
+            <div style="display:flex;justify-content:space-between;gap:1rem;flex-wrap:wrap;font-size:0.82rem;color:var(--text-secondary)">
+                <span>${escapeHtml(detail)}</span>
+                <span class="tabular-nums">${escapeHtml(bytes)}</span>
+            </div>
+        </section>
     `;
 }
 
@@ -2389,7 +2561,7 @@ async function runBackupNow() {
     const data = await res.json();
     if (res.ok) {
         showToast('备份任务已加入队列');
-        setTimeout(loadBackupPanel, 1000);
+        loadBackupPanel({ quiet: true });
     } else {
         showToast(data.error || '备份启动失败', 'error');
     }
@@ -2408,7 +2580,7 @@ async function restoreBackup(name) {
     const data = await res.json();
     if (res.ok) {
         showToast('恢复任务已启动，完成后应用可能会重启');
-        setTimeout(loadBackupPanel, 1000);
+        loadBackupPanel({ quiet: true });
     } else {
         showToast(data.error || '恢复启动失败', 'error');
     }

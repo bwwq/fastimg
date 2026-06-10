@@ -2225,11 +2225,11 @@ function renderBackupProviderForm(provider, config) {
         return `
             <div style="display:grid;grid-template-columns:1fr 1fr;gap:0.75rem;margin-bottom:0.85rem">
                 <div class="form-group" style="margin-bottom:0">
-                    <label>Endpoint</label>
+                    <label>API 地址</label>
                     <input id="backupS3Endpoint" class="input-control" placeholder="https://s3.example.com" value="${escapeAttr(provider.endpoint || '')}">
                 </div>
                 <div class="form-group" style="margin-bottom:0">
-                    <label>Bucket</label>
+                    <label>存储桶</label>
                     <input id="backupS3Bucket" class="input-control" value="${escapeAttr(provider.bucket || '')}">
                 </div>
                 <div class="form-group" style="margin-bottom:0">
@@ -2241,13 +2241,17 @@ function renderBackupProviderForm(provider, config) {
                     <input id="backupS3SecretKey" type="password" class="input-control" autocomplete="new-password" placeholder="${provider.access_key_id ? '留空则不修改' : ''}">
                 </div>
                 <div class="form-group" style="margin-bottom:0">
-                    <label>Region</label>
-                    <input id="backupS3Region" class="input-control" value="${escapeAttr(provider.region || 'auto')}">
+                    <label>区域</label>
+                    <input id="backupS3Region" class="input-control" value="${escapeAttr(provider.region || 'us-east-1')}">
                 </div>
                 <div class="form-group" style="margin-bottom:0">
                     <label>目录</label>
                     <input id="backupS3Dir" class="input-control" value="${escapeAttr(provider.directory || 'fastimg-backups')}">
                 </div>
+                <label class="checkbox-label" style="grid-column:1/-1;display:flex;align-items:center;gap:0.5rem;margin-top:0.2rem">
+                    <input id="backupS3ForcePathStyle" type="checkbox" ${(provider.force_path_style || 'true') === 'true' ? 'checked' : ''}>
+                    路径样式访问
+                </label>
             </div>
         `;
     }
@@ -2300,8 +2304,9 @@ async function saveBackupProvider() {
             bucket: document.getElementById('backupS3Bucket')?.value || '',
             access_key_id: document.getElementById('backupS3AccessKey')?.value || '',
             secret_access_key: document.getElementById('backupS3SecretKey')?.value || '',
-            region: document.getElementById('backupS3Region')?.value || 'auto',
-            directory: document.getElementById('backupS3Dir')?.value || 'fastimg-backups'
+            region: document.getElementById('backupS3Region')?.value || 'us-east-1',
+            directory: document.getElementById('backupS3Dir')?.value || 'fastimg-backups',
+            force_path_style: document.getElementById('backupS3ForcePathStyle')?.checked ? 'true' : 'false'
         };
     } else {
         payload = {

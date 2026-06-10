@@ -235,6 +235,7 @@ def backup_provider_info(app, cfg=None):
                 "endpoint": parser.get("fastimg-s3", "endpoint", fallback=""),
                 "region": parser.get("fastimg-s3", "region", fallback=""),
                 "access_key_id": parser.get("fastimg-s3", "access_key_id", fallback=""),
+                "force_path_style": parser.get("fastimg-s3", "force_path_style", fallback="true"),
             })
 
     return info
@@ -287,8 +288,9 @@ def configure_storage_provider(app, data):
         directory = (data.get("directory") or "fastimg-backups").strip().strip("/")
         access_key_id = (data.get("access_key_id") or "").strip()
         secret_access_key = data.get("secret_access_key") or ""
-        region = (data.get("region") or "auto").strip()
+        region = (data.get("region") or "us-east-1").strip()
         s3_provider = (data.get("s3_provider") or "Other").strip()
+        force_path_style = str(data.get("force_path_style", "true")).lower()
 
         if not bucket:
             raise BackupError("S3 bucket is required")
@@ -304,8 +306,11 @@ def configure_storage_provider(app, data):
         parser.set("fastimg-s3", "env_auth", "false")
         parser.set("fastimg-s3", "access_key_id", access_key_id)
         if secret_access_key:
-            parser.set("fastimg-s3", "secret_access_key", rclone_obscure(app, secret_access_key))
+            # rclone's S3 backend expects the raw secret here. Obscuring it breaks
+            # AWS Signature V4 and causes SignatureDoesNotMatch on many S3-compatible services.
+            parser.set("fastimg-s3", "secret_access_key", secret_access_key)
         parser.set("fastimg-s3", "region", region)
+        parser.set("fastimg-s3", "force_path_style", "true" if force_path_style in {"true", "1", "yes", "on"} else "false")
         if endpoint:
             parser.set("fastimg-s3", "endpoint", endpoint)
         s3_path = bucket if not directory else f"{bucket}/{directory}"

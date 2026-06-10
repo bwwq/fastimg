@@ -2022,7 +2022,7 @@ async function loadBackupPanel() {
             }
         }
 
-        renderBackupPanel(cfgData.config, cfgData.tools || {}, runsData.runs || [], remoteData.files || [], runsData.maintenance, remoteData.remote_error);
+        renderBackupPanel(cfgData.config, cfgData.provider || {}, cfgData.tools || {}, runsData.runs || [], remoteData.files || [], runsData.maintenance, remoteData.remote_error);
     } catch (e) {
         panel.innerHTML = `<div style="color:var(--danger);padding:1rem">${escapeHtml(e.message || '加载失败')}</div>`;
         if (badge) {
@@ -2032,7 +2032,15 @@ async function loadBackupPanel() {
     }
 }
 
-function renderBackupPanel(config, tools, runs, remoteFiles, maintenance, remoteError) {
+let backupProviderMode = null;
+let backupPanelState = null;
+
+function renderBackupPanel(config, provider, tools, runs, remoteFiles, maintenance, remoteError) {
+    backupPanelState = { config, provider, tools, runs, remoteFiles, maintenance, remoteError };
+    if (!backupProviderMode) {
+        backupProviderMode = provider.mode || (config.remote_path ? 'custom' : 'webdav');
+    }
+
     const panel = document.getElementById('backupPanel');
     const badge = document.getElementById('backupStatusBadge');
     const configured = config.has_identity && config.remote_path;
@@ -2074,13 +2082,42 @@ function renderBackupPanel(config, tools, runs, remoteFiles, maintenance, remote
 
     panel.innerHTML = `
         ${maintenance ? `<div style="padding:0.85rem 1rem;border:1px solid var(--border);border-radius:var(--radius-sm);margin-bottom:1rem;color:var(--warning)">维护中：${escapeHtml(maintenance.reason || maintenance.mode || '')}</div>` : ''}
-        <div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(260px,1fr));gap:1rem;margin-bottom:1rem">
-            <div style="display:flex;flex-direction:column;gap:0.85rem">
-                <div class="form-group" style="margin-bottom:0">
-                    <label>rclone 远端路径</label>
-                    <input id="backupRemotePath" class="input-control" placeholder="onedrive:fastimg-backups" value="${escapeAttr(config.remote_path || '')}">
+        <div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(320px,1fr));gap:1rem;margin-bottom:1rem">
+            <section style="border:1px solid var(--border);border-radius:var(--radius-sm);padding:1rem">
+                <div style="display:flex;justify-content:space-between;gap:1rem;align-items:center;margin-bottom:1rem">
+                    <div>
+                        <h4 style="font-size:0.95rem;margin:0 0 0.25rem 0">1. 云端连接</h4>
+                        <div style="font-size:0.78rem;color:var(--text-muted)">当前目标：${escapeHtml(config.remote_path || '未设置')}</div>
+                    </div>
                 </div>
-                <div style="display:grid;grid-template-columns:1fr 1fr 1fr;gap:0.75rem">
+                <div class="view-toggle" style="width:max-content;margin-bottom:1rem">
+                    <button class="${backupProviderMode === 'webdav' ? 'active' : ''}" onclick="setBackupProviderMode('webdav')" title="WebDAV">
+                        <i data-lucide="folder-sync" style="width:15px;height:15px"></i>
+                    </button>
+                    <button class="${backupProviderMode === 's3' ? 'active' : ''}" onclick="setBackupProviderMode('s3')" title="S3 / R2 / MinIO">
+                        <i data-lucide="database" style="width:15px;height:15px"></i>
+                    </button>
+                    <button class="${backupProviderMode === 'custom' ? 'active' : ''}" onclick="setBackupProviderMode('custom')" title="自定义 rclone">
+                        <i data-lucide="terminal" style="width:15px;height:15px"></i>
+                    </button>
+                </div>
+                <div id="backupProviderForm">${renderBackupProviderForm(provider, config)}</div>
+                <div style="display:flex;gap:0.5rem;flex-wrap:wrap">
+                    <button class="btn btn-primary" onclick="saveBackupProvider()">
+                        <i data-lucide="save" style="width:16px;height:16px"></i> 保存连接
+                    </button>
+                    <button class="btn btn-secondary" onclick="testBackupRemote()">
+                        <i data-lucide="plug" style="width:16px;height:16px"></i> 测试远端
+                    </button>
+                    <button class="btn btn-secondary" onclick="loadBackupPanel()">
+                        <i data-lucide="refresh-cw" style="width:16px;height:16px"></i> 刷新
+                    </button>
+                </div>
+                <div class="tags" style="margin-top:0.85rem">${toolRows}</div>
+            </section>
+            <section style="border:1px solid var(--border);border-radius:var(--radius-sm);padding:1rem">
+                <h4 style="font-size:0.95rem;margin:0 0 1rem 0">2. 备份与恢复</h4>
+                <div style="display:grid;grid-template-columns:1fr 1fr 1fr;gap:0.75rem;margin-bottom:0.85rem">
                     <div class="form-group" style="margin-bottom:0">
                         <label>备份时间</label>
                         <input id="backupScheduleTime" type="time" class="input-control" value="${escapeAttr(config.schedule_time || '03:30')}">
@@ -2094,24 +2131,11 @@ function renderBackupPanel(config, tools, runs, remoteFiles, maintenance, remote
                         <input id="backupTimezone" class="input-control" value="${escapeAttr(config.timezone || 'Asia/Shanghai')}">
                     </div>
                 </div>
-                <label class="checkbox-label" style="display:flex;align-items:center;gap:0.5rem">
+                <label class="checkbox-label" style="display:flex;align-items:center;gap:0.5rem;margin-bottom:0.85rem">
                     <input id="backupEnabled" type="checkbox" ${config.enabled ? 'checked' : ''}>
                     启用定时备份
                 </label>
-                <div style="display:flex;gap:0.5rem;flex-wrap:wrap">
-                    <button class="btn btn-primary" onclick="saveBackupConfig()">
-                        <i data-lucide="save" style="width:16px;height:16px"></i> 保存配置
-                    </button>
-                    <button class="btn btn-secondary" onclick="testBackupRemote()">
-                        <i data-lucide="plug" style="width:16px;height:16px"></i> 测试远端
-                    </button>
-                    <button class="btn btn-secondary" onclick="loadBackupPanel()">
-                        <i data-lucide="refresh-cw" style="width:16px;height:16px"></i> 刷新
-                    </button>
-                </div>
-            </div>
-            <div style="display:flex;flex-direction:column;gap:0.85rem">
-                <div>
+                <div style="margin-bottom:0.85rem">
                     <label style="display:block;font-size:0.85rem;margin-bottom:0.4rem;color:var(--text-secondary)">备份密码</label>
                     <div style="display:flex;gap:0.5rem">
                         <input id="backupPassword" type="password" class="input-control" placeholder="${config.has_identity ? '输入以验证或导出恢复包' : '首次配置，至少 10 位'}">
@@ -2122,6 +2146,9 @@ function renderBackupPanel(config, tools, runs, remoteFiles, maintenance, remote
                     <p style="font-size:0.78rem;color:var(--text-muted);margin-top:0.45rem">密码不会上传明文；私钥会用它加密。丢失密码后无法恢复旧备份。</p>
                 </div>
                 <div style="display:flex;gap:0.5rem;flex-wrap:wrap">
+                    <button class="btn btn-secondary" onclick="saveBackupConfig()">
+                        <i data-lucide="save" style="width:16px;height:16px"></i> 保存策略
+                    </button>
                     <button class="btn btn-primary" onclick="runBackupNow()" ${configured ? '' : 'disabled'}>
                         <i data-lucide="cloud-upload" style="width:16px;height:16px"></i> 立即备份
                     </button>
@@ -2129,8 +2156,7 @@ function renderBackupPanel(config, tools, runs, remoteFiles, maintenance, remote
                         <i data-lucide="download" style="width:16px;height:16px"></i> 导出恢复包
                     </button>
                 </div>
-                <div class="tags" style="margin:0">${toolRows}</div>
-            </div>
+            </section>
         </div>
         <div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(280px,1fr));gap:1rem">
             <div style="border:1px solid var(--border);border-radius:var(--radius-sm);overflow:hidden">
@@ -2156,6 +2182,84 @@ function renderBackupPanel(config, tools, runs, remoteFiles, maintenance, remote
     refreshIcons();
 }
 
+function setBackupProviderMode(mode) {
+    backupProviderMode = mode;
+    if (backupPanelState) {
+        renderBackupPanel(
+            backupPanelState.config,
+            backupPanelState.provider,
+            backupPanelState.tools,
+            backupPanelState.runs,
+            backupPanelState.remoteFiles,
+            backupPanelState.maintenance,
+            backupPanelState.remoteError
+        );
+    }
+}
+
+function renderBackupProviderForm(provider, config) {
+    if (backupProviderMode === 'webdav') {
+        return `
+            <div style="display:grid;grid-template-columns:1fr 1fr;gap:0.75rem;margin-bottom:0.85rem">
+                <div class="form-group" style="grid-column:1/-1;margin-bottom:0">
+                    <label>WebDAV 地址</label>
+                    <input id="backupWebdavUrl" class="input-control" placeholder="https://data.example.com/dav" value="${escapeAttr(provider.url || '')}">
+                </div>
+                <div class="form-group" style="margin-bottom:0">
+                    <label>用户名</label>
+                    <input id="backupWebdavUser" class="input-control" autocomplete="off" value="${escapeAttr(provider.username || '')}">
+                </div>
+                <div class="form-group" style="margin-bottom:0">
+                    <label>密码</label>
+                    <input id="backupWebdavPass" type="password" class="input-control" autocomplete="new-password" placeholder="${provider.username ? '留空则不修改' : ''}">
+                </div>
+                <div class="form-group" style="grid-column:1/-1;margin-bottom:0">
+                    <label>远端目录</label>
+                    <input id="backupWebdavDir" class="input-control" value="${escapeAttr(provider.directory || 'fastimg-backups')}">
+                </div>
+            </div>
+        `;
+    }
+
+    if (backupProviderMode === 's3') {
+        return `
+            <div style="display:grid;grid-template-columns:1fr 1fr;gap:0.75rem;margin-bottom:0.85rem">
+                <div class="form-group" style="margin-bottom:0">
+                    <label>Endpoint</label>
+                    <input id="backupS3Endpoint" class="input-control" placeholder="https://s3.example.com" value="${escapeAttr(provider.endpoint || '')}">
+                </div>
+                <div class="form-group" style="margin-bottom:0">
+                    <label>Bucket</label>
+                    <input id="backupS3Bucket" class="input-control" value="${escapeAttr(provider.bucket || '')}">
+                </div>
+                <div class="form-group" style="margin-bottom:0">
+                    <label>Access Key</label>
+                    <input id="backupS3AccessKey" class="input-control" autocomplete="off" value="${escapeAttr(provider.access_key_id || '')}">
+                </div>
+                <div class="form-group" style="margin-bottom:0">
+                    <label>Secret Key</label>
+                    <input id="backupS3SecretKey" type="password" class="input-control" autocomplete="new-password" placeholder="${provider.access_key_id ? '留空则不修改' : ''}">
+                </div>
+                <div class="form-group" style="margin-bottom:0">
+                    <label>Region</label>
+                    <input id="backupS3Region" class="input-control" value="${escapeAttr(provider.region || 'auto')}">
+                </div>
+                <div class="form-group" style="margin-bottom:0">
+                    <label>目录</label>
+                    <input id="backupS3Dir" class="input-control" value="${escapeAttr(provider.directory || 'fastimg-backups')}">
+                </div>
+            </div>
+        `;
+    }
+
+    return `
+        <div class="form-group" style="margin-bottom:0.85rem">
+            <label>rclone 路径</label>
+            <input id="backupCustomRemotePath" class="input-control" placeholder="remote:path" value="${escapeAttr(config.remote_path || '')}">
+        </div>
+    `;
+}
+
 function backupStatusLabel(status) {
     const color = status === 'success' ? 'var(--success)' : (status === 'failed' ? 'var(--danger)' : 'var(--warning)');
     return `<span style="color:${color};font-weight:600">${escapeHtml(status || '-')}</span>`;
@@ -2178,10 +2282,52 @@ function escapeAttr(str) {
     return escapeHtml(String(str ?? '')).replace(/"/g, '&quot;');
 }
 
+async function saveBackupProvider() {
+    let payload = { provider: backupProviderMode || 'webdav' };
+
+    if (payload.provider === 'webdav') {
+        payload = {
+            provider: 'webdav',
+            url: document.getElementById('backupWebdavUrl')?.value || '',
+            username: document.getElementById('backupWebdavUser')?.value || '',
+            password: document.getElementById('backupWebdavPass')?.value || '',
+            directory: document.getElementById('backupWebdavDir')?.value || 'fastimg-backups'
+        };
+    } else if (payload.provider === 's3') {
+        payload = {
+            provider: 's3',
+            endpoint: document.getElementById('backupS3Endpoint')?.value || '',
+            bucket: document.getElementById('backupS3Bucket')?.value || '',
+            access_key_id: document.getElementById('backupS3AccessKey')?.value || '',
+            secret_access_key: document.getElementById('backupS3SecretKey')?.value || '',
+            region: document.getElementById('backupS3Region')?.value || 'auto',
+            directory: document.getElementById('backupS3Dir')?.value || 'fastimg-backups'
+        };
+    } else {
+        payload = {
+            provider: 'custom',
+            remote_path: document.getElementById('backupCustomRemotePath')?.value || ''
+        };
+    }
+
+    const res = await fetch('/api/admin/backups/provider', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(payload)
+    });
+    const data = await res.json();
+    if (res.ok) {
+        showToast('云端连接已保存');
+        backupProviderMode = data.provider?.mode || backupProviderMode;
+        loadBackupPanel();
+    } else {
+        showToast(data.error || '连接保存失败', 'error');
+    }
+}
+
 async function saveBackupConfig() {
     const payload = {
         enabled: document.getElementById('backupEnabled')?.checked || false,
-        remote_path: document.getElementById('backupRemotePath')?.value || '',
         schedule_time: document.getElementById('backupScheduleTime')?.value || '03:30',
         timezone: document.getElementById('backupTimezone')?.value || 'Asia/Shanghai',
         retention_count: parseInt(document.getElementById('backupRetention')?.value || '7', 10)

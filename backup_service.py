@@ -1,4 +1,5 @@
 import base64
+import configparser
 import hashlib
 import io
 import json
@@ -104,6 +105,23 @@ def rclone_config_path(app):
     )
 
 
+def read_rclone_config(app):
+    parser = configparser.RawConfigParser()
+    parser.optionxform = str
+    path = rclone_config_path(app)
+    if os.path.exists(path):
+        parser.read(path, encoding="utf-8")
+    return parser
+
+
+def write_rclone_config(app, parser):
+    path = rclone_config_path(app)
+    os.makedirs(os.path.dirname(path), exist_ok=True)
+    with open(path, "w", encoding="utf-8") as f:
+        parser.write(f)
+    return path
+
+
 def db_file_from_uri(uri):
     if not uri.startswith("sqlite:///"):
         raise BackupError("Only SQLite DATABASE_URL is supported by backup v1")
@@ -145,6 +163,25 @@ def run_cmd(args, app=None, input_data=None, timeout=600):
     return proc
 
 
+def rclone_obscure(app, value):
+    require_tools("rclone")
+    env = os.environ.copy()
+    rc_path = rclone_config_path(app)
+    if os.path.exists(rc_path):
+        env["RCLONE_CONFIG"] = rc_path
+    proc = subprocess.run(
+        ["rclone", "obscure", value],
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
+        env=env,
+        timeout=30,
+        check=False,
+    )
+    if proc.returncode != 0:
+        raise BackupError("Failed to encode secret for rclone config")
+    return proc.stdout.decode("utf-8", errors="replace").strip()
+
+
 def tool_status(app=None):
     tools = {}
     for tool in ("age", "age-keygen", "zstd", "rclone"):
@@ -152,6 +189,131 @@ def tool_status(app=None):
     if app:
         tools["rclone_config"] = os.path.exists(rclone_config_path(app))
     return tools
+
+
+def _remote_path(remote_name, path):
+    clean = (path or "").strip().strip("/")
+    return f"{remote_name}:{clean}" if clean else f"{remote_name}:"
+
+
+def _split_remote_path(remote_path, remote_name):
+    prefix = f"{remote_name}:"
+    if not (remote_path or "").startswith(prefix):
+        return ""
+    return (remote_path or "")[len(prefix):].strip("/")
+
+
+def backup_provider_info(app, cfg=None):
+    cfg = cfg or get_backup_config()
+    remote_path = cfg.remote_path or ""
+    info = {
+        "mode": "custom",
+        "remote_path": remote_path,
+    }
+    parser = read_rclone_config(app)
+
+    if remote_path.startswith("fastimg-webdav:"):
+        info["mode"] = "webdav"
+        info["directory"] = _split_remote_path(remote_path, "fastimg-webdav")
+        if parser.has_section("fastimg-webdav"):
+            info.update({
+                "url": parser.get("fastimg-webdav", "url", fallback=""),
+                "username": parser.get("fastimg-webdav", "user", fallback=""),
+                "vendor": parser.get("fastimg-webdav", "vendor", fallback="other"),
+            })
+    elif remote_path.startswith("fastimg-s3:"):
+        info["mode"] = "s3"
+        s3_path = _split_remote_path(remote_path, "fastimg-s3")
+        bucket, _, directory = s3_path.partition("/")
+        info.update({
+            "bucket": bucket,
+            "directory": directory,
+        })
+        if parser.has_section("fastimg-s3"):
+            info.update({
+                "provider": parser.get("fastimg-s3", "provider", fallback="Other"),
+                "endpoint": parser.get("fastimg-s3", "endpoint", fallback=""),
+                "region": parser.get("fastimg-s3", "region", fallback=""),
+                "access_key_id": parser.get("fastimg-s3", "access_key_id", fallback=""),
+            })
+
+    return info
+
+
+def configure_storage_provider(app, data):
+    provider = (data.get("provider") or "").strip().lower()
+    if provider not in {"webdav", "s3", "custom"}:
+        raise BackupError("Unsupported backup storage provider")
+
+    cfg = get_backup_config()
+
+    if provider == "custom":
+        remote_path = (data.get("remote_path") or "").strip()
+        if not remote_path or ":" not in remote_path:
+            raise BackupError("Custom rclone path must look like remote:path")
+        cfg.remote_path = remote_path
+        db.session.commit()
+        return cfg
+
+    require_tools("rclone")
+    parser = read_rclone_config(app)
+
+    if provider == "webdav":
+        url = (data.get("url") or "").strip()
+        username = (data.get("username") or "").strip()
+        password = data.get("password") or ""
+        directory = (data.get("directory") or "fastimg-backups").strip().strip("/")
+
+        if not url.startswith(("http://", "https://")):
+            raise BackupError("WebDAV URL must start with http:// or https://")
+        if not username:
+            raise BackupError("WebDAV username is required")
+        if not password and not parser.has_option("fastimg-webdav", "pass"):
+            raise BackupError("WebDAV password is required")
+
+        if not parser.has_section("fastimg-webdav"):
+            parser.add_section("fastimg-webdav")
+        parser.set("fastimg-webdav", "type", "webdav")
+        parser.set("fastimg-webdav", "url", url)
+        parser.set("fastimg-webdav", "vendor", data.get("vendor") or "other")
+        parser.set("fastimg-webdav", "user", username)
+        if password:
+            parser.set("fastimg-webdav", "pass", rclone_obscure(app, password))
+        cfg.remote_path = _remote_path("fastimg-webdav", directory)
+
+    if provider == "s3":
+        endpoint = (data.get("endpoint") or "").strip()
+        bucket = (data.get("bucket") or "").strip().strip("/")
+        directory = (data.get("directory") or "fastimg-backups").strip().strip("/")
+        access_key_id = (data.get("access_key_id") or "").strip()
+        secret_access_key = data.get("secret_access_key") or ""
+        region = (data.get("region") or "auto").strip()
+        s3_provider = (data.get("s3_provider") or "Other").strip()
+
+        if not bucket:
+            raise BackupError("S3 bucket is required")
+        if not access_key_id:
+            raise BackupError("S3 access key is required")
+        if not secret_access_key and not parser.has_option("fastimg-s3", "secret_access_key"):
+            raise BackupError("S3 secret key is required")
+
+        if not parser.has_section("fastimg-s3"):
+            parser.add_section("fastimg-s3")
+        parser.set("fastimg-s3", "type", "s3")
+        parser.set("fastimg-s3", "provider", s3_provider)
+        parser.set("fastimg-s3", "env_auth", "false")
+        parser.set("fastimg-s3", "access_key_id", access_key_id)
+        if secret_access_key:
+            parser.set("fastimg-s3", "secret_access_key", rclone_obscure(app, secret_access_key))
+        parser.set("fastimg-s3", "region", region)
+        if endpoint:
+            parser.set("fastimg-s3", "endpoint", endpoint)
+        s3_path = bucket if not directory else f"{bucket}/{directory}"
+        cfg.remote_path = _remote_path("fastimg-s3", s3_path)
+
+    write_rclone_config(app, parser)
+    db.session.commit()
+    return cfg
 
 
 def require_tools(*names):

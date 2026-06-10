@@ -12,6 +12,8 @@ from models import User, Image, ImageStat, SystemConfig, InviteCode, Folder, Bac
 from utils import process_and_save_image
 from backup_service import (
     BackupError,
+    backup_provider_info,
+    configure_storage_provider,
     current_maintenance,
     export_recovery_kit,
     get_backup_config,
@@ -629,6 +631,7 @@ def create_app(config_class=Config):
                 cfg = get_backup_config()
                 return jsonify({
                     'config': cfg.to_dict(),
+                    'provider': backup_provider_info(app, cfg),
                     'tools': tool_status(app)
                 })
 
@@ -637,6 +640,25 @@ def create_app(config_class=Config):
             return jsonify({
                 'message': 'Backup config saved',
                 'config': cfg.to_dict(),
+                'provider': backup_provider_info(app, cfg),
+                'tools': tool_status(app)
+            })
+        except BackupError as e:
+            return backup_error_response(e)
+        except Exception as e:
+            return backup_error_response(e)
+
+    @app.route('/api/admin/backups/provider', methods=['POST'])
+    @login_required
+    def admin_backup_provider():
+        require_admin()
+        data = request.get_json() or {}
+        try:
+            cfg = configure_storage_provider(app, data)
+            return jsonify({
+                'message': 'Backup storage saved',
+                'config': cfg.to_dict(),
+                'provider': backup_provider_info(app, cfg),
                 'tools': tool_status(app)
             })
         except BackupError as e:

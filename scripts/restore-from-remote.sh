@@ -132,11 +132,36 @@ fi
 
 echo "Replacing data/database.db and uploads/..."
 mkdir -p "$DATA_DIR"
-cp "$TMP_DIR/extract/data/database.db" "$DATA_DIR/database.db"
-rm -rf "$UPLOADS_DIR"
 mkdir -p "$UPLOADS_DIR"
-if [ -d "$TMP_DIR/extract/uploads" ]; then
-  cp -R "$TMP_DIR/extract/uploads/." "$UPLOADS_DIR/"
+
+restore_rollback() {
+  echo "Restore failed; rolling back local data copy..." >&2
+  if [ -f "$ROLLBACK_DIR/data/database.db" ]; then
+    cp "$ROLLBACK_DIR/data/database.db" "$DATA_DIR/database.db"
+  fi
+  if [ -d "$ROLLBACK_DIR/uploads" ]; then
+    rm -rf "$UPLOADS_DIR"
+    mkdir -p "$UPLOADS_DIR"
+    cp -R "$ROLLBACK_DIR/uploads/." "$UPLOADS_DIR/"
+  fi
+}
+
+if ! (
+  if [ -d "$TMP_DIR/extract/uploads" ]; then
+    cp -R "$TMP_DIR/extract/uploads/." "$UPLOADS_DIR/"
+  fi
+  python3 "$SCRIPT_DIR/restore_from_remote.py" validate-db-uploads \
+    --db "$TMP_DIR/extract/data/database.db" \
+    --uploads "$UPLOADS_DIR"
+  cp "$TMP_DIR/extract/data/database.db" "$DATA_DIR/database.db"
+  python3 "$SCRIPT_DIR/restore_from_remote.py" sanitize-db \
+    --db "$DATA_DIR/database.db"
+  python3 "$SCRIPT_DIR/restore_from_remote.py" validate-db-uploads \
+    --db "$DATA_DIR/database.db" \
+    --uploads "$UPLOADS_DIR"
+); then
+  restore_rollback
+  exit 8
 fi
 
 python3 "$SCRIPT_DIR/restore_from_remote.py" write-env \

@@ -925,6 +925,8 @@ def safe_extract_tar(tar_path, dest):
     dest_real = os.path.realpath(dest)
     with tarfile.open(tar_path, "r") as tar:
         for member in tar.getmembers():
+            if member.issym() or member.islnk():
+                raise BackupError("Backup archive contains unsupported link entries")
             member_path = os.path.realpath(os.path.join(dest, member.name))
             if not member_path.startswith(dest_real + os.sep) and member_path != dest_real:
                 raise BackupError("Unsafe path in backup archive")
@@ -942,7 +944,7 @@ def validate_extracted_backup(extract_dir):
     if sha256_file(db_path) != manifest["database"]["sha256"]:
         raise BackupError("Database checksum mismatch")
     for item in manifest.get("uploads", []):
-        path = os.path.join(uploads_dir, item["filename"])
+        path = upload_file_path(uploads_dir, item["filename"])
         if not os.path.isfile(path):
             raise BackupError(f"Backup is missing upload file: {item['filename']}")
         if sha256_file(path) != item["sha256"]:
@@ -955,7 +957,7 @@ def validate_extracted_backup(extract_dir):
         filenames = [row[0] for row in cur.fetchall()]
     finally:
         conn.close()
-    missing = [name for name in filenames if not os.path.isfile(os.path.join(uploads_dir, name))]
+    missing = [name for name in filenames if not os.path.isfile(upload_file_path(uploads_dir, name))]
     if missing:
         raise BackupError("Restored database references missing files: " + ", ".join(missing[:10]))
     return manifest
@@ -1028,7 +1030,7 @@ def copy_directory_contents(src, dest):
         src_path = os.path.join(src, name)
         dest_path = os.path.join(dest, name)
         if os.path.isdir(src_path) and not os.path.islink(src_path):
-            shutil.copytree(src_path, dest_path)
+            shutil.copytree(src_path, dest_path, dirs_exist_ok=True)
         else:
             shutil.copy2(src_path, dest_path)
 
@@ -1051,13 +1053,23 @@ def database_image_filenames(db_path):
         conn.close()
 
 
+def upload_file_path(uploads_dir, filename):
+    if not filename or os.path.isabs(filename) or os.path.basename(filename) != filename:
+        raise BackupError(f"Unsafe upload filename in database: {filename}")
+    return os.path.join(uploads_dir, filename)
+
+
 def validate_uploads_available_for_db(db_path, uploads_dir):
+    filenames = database_image_filenames(db_path)
     missing = [
-        name for name in database_image_filenames(db_path)
-        if not os.path.isfile(os.path.join(uploads_dir, name))
+        name for name in filenames
+        if not os.path.isfile(upload_file_path(uploads_dir, name))
     ]
     if missing:
-        raise BackupError("Restored uploads are missing files: " + ", ".join(missing[:10]))
+        raise BackupError(
+            f"Restored uploads are missing {len(missing)} file(s): " + ", ".join(missing[:10])
+        )
+    return len(filenames)
 
 
 def execute_restore(app, run_id, backup_name, password):
@@ -1189,6 +1201,7 @@ def restore_into_app(app, extract_dir):
         shutil.copy2(restore_db, db_file)
         ensure_backup_run_progress_columns(db_file)
         sanitize_snapshot_db(db_file)
+        validate_uploads_available_for_db(db_file, uploads_dir)
     except Exception:
         if os.path.exists(rollback_db):
             shutil.copy2(rollback_db, db_file)

@@ -47,6 +47,8 @@ def safe_extract(tar_path, dest):
     dest_real = os.path.realpath(dest)
     with tarfile.open(tar_path, "r") as tar:
         for member in tar.getmembers():
+            if member.issym() or member.islnk():
+                raise SystemExit(f"Unsupported link entry in archive: {member.name}")
             member_path = os.path.realpath(os.path.join(dest, member.name))
             if not member_path.startswith(dest_real + os.sep) and member_path != dest_real:
                 raise SystemExit(f"Unsafe path in archive: {member.name}")
@@ -58,10 +60,18 @@ def safe_extract_bytes(data, dest):
     import io
     with tarfile.open(fileobj=io.BytesIO(data), mode="r") as tar:
         for member in tar.getmembers():
+            if member.issym() or member.islnk():
+                raise SystemExit(f"Unsupported link entry in recovery kit: {member.name}")
             member_path = os.path.realpath(os.path.join(dest, member.name))
             if not member_path.startswith(dest_real + os.sep) and member_path != dest_real:
                 raise SystemExit(f"Unsafe path in recovery kit: {member.name}")
         tar.extractall(dest)
+
+
+def upload_file_path(uploads_dir, filename):
+    if not filename or os.path.isabs(filename) or os.path.basename(filename) != filename:
+        raise SystemExit(f"Unsafe upload filename in database: {filename}")
+    return os.path.join(uploads_dir, filename)
 
 
 def validate(dest):
@@ -78,7 +88,7 @@ def validate(dest):
         raise SystemExit("Database checksum mismatch")
 
     for item in manifest.get("uploads", []):
-        path = os.path.join(uploads_dir, item["filename"])
+        path = upload_file_path(uploads_dir, item["filename"])
         if not os.path.isfile(path):
             raise SystemExit(f"Missing upload file: {item['filename']}")
         if sha256_file(path) != item["sha256"]:
@@ -92,9 +102,62 @@ def validate(dest):
     finally:
         conn.close()
 
-    missing = [name for name in filenames if not os.path.isfile(os.path.join(uploads_dir, name))]
+    missing = [name for name in filenames if not os.path.isfile(upload_file_path(uploads_dir, name))]
     if missing:
         raise SystemExit("Restored database references missing files: " + ", ".join(missing[:10]))
+
+
+def validate_db_uploads(args):
+    db_path = args.db
+    uploads_dir = args.uploads
+    if not os.path.isfile(db_path):
+        raise SystemExit(f"Database not found: {db_path}")
+    if not os.path.isdir(uploads_dir):
+        raise SystemExit(f"Uploads directory not found: {uploads_dir}")
+
+    conn = sqlite3.connect(db_path)
+    try:
+        cur = conn.cursor()
+        cur.execute("SELECT name FROM sqlite_master WHERE type='table' AND name='image'")
+        if not cur.fetchone():
+            return
+        cur.execute("SELECT filename FROM image")
+        filenames = [row[0] for row in cur.fetchall()]
+    finally:
+        conn.close()
+
+    missing = [name for name in filenames if not os.path.isfile(upload_file_path(uploads_dir, name))]
+    if missing:
+        raise SystemExit(
+            f"Database references missing {len(missing)} upload file(s): " + ", ".join(missing[:10])
+        )
+
+
+def sanitize_db(args):
+    db_path = args.db
+    if not os.path.isfile(db_path):
+        raise SystemExit(f"Database not found: {db_path}")
+
+    conn = sqlite3.connect(db_path)
+    try:
+        cur = conn.cursor()
+        cur.execute("SELECT name FROM sqlite_master WHERE type='table' AND name='maintenance_state'")
+        if cur.fetchone():
+            cur.execute("""
+                UPDATE maintenance_state
+                SET active = 0, mode = NULL, reason = NULL, owner = NULL, started_at = NULL
+                WHERE id = 1
+            """)
+        cur.execute("SELECT name FROM sqlite_master WHERE type='table' AND name='backup_run'")
+        if cur.fetchone():
+            cur.execute("""
+                DELETE FROM backup_run
+                WHERE status IN ('queued', 'running')
+                   OR error = 'Interrupted by database snapshot restore'
+            """)
+        conn.commit()
+    finally:
+        conn.close()
 
 
 def decrypt_identity(args):
@@ -157,6 +220,15 @@ def main():
     p.add_argument("--extract", required=True)
     p.add_argument("--env", required=True)
     p.set_defaults(func=write_env)
+
+    p = sub.add_parser("validate-db-uploads")
+    p.add_argument("--db", required=True)
+    p.add_argument("--uploads", required=True)
+    p.set_defaults(func=validate_db_uploads)
+
+    p = sub.add_parser("sanitize-db")
+    p.add_argument("--db", required=True)
+    p.set_defaults(func=sanitize_db)
 
     p = sub.add_parser("unpack-kit")
     p.add_argument("--password", required=True)
